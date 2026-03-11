@@ -22,6 +22,10 @@ key = get_api_key()
 if key:
     genai.configure(api_key=key)
     model = genai.GenerativeModel('gemini-1.5-pro')
+    # Đoạn code này sẽ liệt kê các model bạn có quyền dùng
+for m in genai.list_models():
+    if 'generateContent' in m.supported_generation_methods:
+        print(m.name)
 else:
     st.error("Cảnh báo: Thiếu GEMINI_API_KEY. Hãy kiểm tra lại file .env hoặc Secrets.")
     st.stop()
