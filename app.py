@@ -20,7 +20,7 @@ key = get_api_key()
 
 if key:
     genai.configure(api_key=key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-pro')
     # Đoạn code này sẽ liệt kê các model bạn có quyền dùng
 else:
     st.error("Cảnh báo: Thiếu GEMINI_API_KEY. Hãy kiểm tra lại file .env hoặc Secrets.")
