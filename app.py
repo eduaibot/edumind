@@ -1,83 +1,80 @@
 import streamlit as st
 import google.generativeai as genai
+import os
+from dotenv import load_dotenv
 
-# --- CẤU HÌNH TRANG ---
+# Load biến môi trường từ .env (nếu có)
+load_dotenv()
+
 st.set_page_config(page_title="EduMind AI", page_icon="🎓", layout="wide")
 
-# --- KẾT NỐI API (Bảo mật qua Secrets) ---
-# Khi chạy online, bạn sẽ dán API Key vào phần Settings của Streamlit Cloud
-try:
-    API_KEY = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except:
-    st.error("Chưa tìm thấy API Key! Hãy cấu hình trong phần Secrets.")
+# --- QUẢN LÝ API KEY ---
+def get_api_key():
+    # 1. Thử lấy từ môi trường (local .env hoặc system env)
+    key = os.getenv("GEMINI_API_KEY")
+    # 2. Nếu không thấy, thử lấy từ st.secrets (Streamlit Cloud)
+    if not key and "GEMINI_API_KEY" in st.secrets:
+        key = st.secrets["GEMINI_API_KEY"]
+    return key
 
-# --- SIDEBAR - THANH ĐIỀU HƯỚNG ---
+key = get_api_key()
+
+if key:
+    genai.configure(api_key=key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    st.error("Cảnh báo: Thiếu GEMINI_API_KEY. Hãy kiểm tra lại file .env hoặc Secrets.")
+    st.stop()
+
+# --- GIAO DIỆN ---
 with st.sidebar:
     st.title("🛡️ EduMind Hub")
-    st.info("Trợ lý toàn diện cho học sinh Gen Z")
-    choice = st.option_menu(
-        menu_title="Tính năng chính",
-        options=["Tâm Lý & Sức Khỏe", "Giải Bài Tập AI", "Định Hướng Tương Lai"],
-        icons=["heart", "book", "compass"],
-        default_index=0,
+    choice = st.selectbox(
+        "Tính năng chính",
+        ["Tâm Lý & Sức Khỏe", "Giải Bài Tập AI", "Định Hướng Tương Lai"]
     )
 
-# --- MODULE 1: TÂM LÝ & SỨC KHỎE ---
 if choice == "Tâm Lý & Sức Khỏe":
     st.header("💬 Trạm Sẻ Chia Tâm Hồn")
-    st.write("Đừng giữ nỗi buồn một mình, hãy tâm sự với mình nhé!")
-    
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    if "msgs" not in st.session_state:
+        st.session_state.msgs = []
 
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    for m in st.session_state.msgs:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
 
-    if prompt := st.chat_input("Hôm nay bạn thấy thế nào?"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    if p := st.chat_input("Hôm nay bạn thấy thế nào?"):
+        st.session_state.msgs.append({"role": "user", "content": p})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(p)
 
         with st.chat_message("assistant"):
-            # System Prompt để AI đóng vai chuyên gia tâm lý
-            system_prompt = "Bạn là chuyên gia tư vấn tâm lý học đường hiền hậu. Hãy lắng nghe và an ủi học sinh sau đây: "
-            response = model.generate_content(system_prompt + prompt)
-            st.markdown(response.text)
-            st.session_state.messages.append({"role": "assistant", "content": response.text})
+            sys_p = "Bạn là chuyên gia tư vấn tâm lý học đường hiền hậu. Hãy lắng nghe và an ủi: "
+            resp = model.generate_content(sys_p + p)
+            st.markdown(resp.text)
+            st.session_state.msgs.append({"role": "assistant", "content": resp.text})
 
-# --- MODULE 2: GIẢI BÀI TẬP AI ---
 elif choice == "Giải Bài Tập AI":
     st.header("📚 Gia Sư Thông Thái")
-    st.write("Tải ảnh đề bài hoặc nhập câu hỏi khó tại đây.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        uploaded_file = st.file_uploader("Gửi ảnh đề bài (Toán, Lý, Hóa, Anh...)", type=["jpg", "png", "jpeg"])
-    with col2:
-        user_question = st.text_area("Hoặc dán nội dung câu hỏi vào đây:")
+    c1, c2 = st.columns(2)
+    with c1:
+        f = st.file_uploader("Gửi ảnh đề bài", type=["jpg", "png", "jpeg"])
+    with c2:
+        q = st.text_area("Hoặc dán câu hỏi:")
 
-    if st.button("Giải đáp ngay"):
-        if uploaded_file or user_question:
-            with st.spinner("Đang suy nghĩ..."):
-                # Logic gọi AI xử lý đa phương thức (ảnh + chữ)
-                content = ["Hãy giải chi tiết bài tập này và giải thích các bước:", uploaded_file if uploaded_file else user_question]
-                response = model.generate_content(content)
-                st.success("Kết quả gợi ý:")
-                st.write(response.text)
-        else:
-            st.warning("Vui lòng nhập câu hỏi hoặc tải ảnh lên!")
+    if st.button("Giải đáp"):
+        if f or q:
+            with st.spinner("Đang giải..."):
+                cnt = ["Giải chi tiết và giải thích các bước:", f if f else q]
+                resp = model.generate_content(cnt)
+                st.success("Kết quả:")
+                st.write(resp.text)
 
-# --- MODULE 3: ĐỊNH HƯỚNG TƯƠNG LAI ---
 elif choice == "Định Hướng Tương Lai":
     st.header("🧭 La Bàn Nghề Nghiệp")
-    st.subheader("Trắc nghiệm nhanh sở thích")
-    
-    hobby = st.multiselect("Bạn thích làm gì nhất?", ["Lập trình", "Vẽ/Thiết kế", "Kinh doanh", "Viết lách", "Chăm sóc cây cối"])
-    if st.button("Xem gợi ý nghề nghiệp"):
-        if hobby:
-            res = model.generate_content(f"Dựa trên sở thích {hobby}, hãy gợi ý 3 ngành nghề hot nhất năm 2026 và lộ trình học.")
+    h = st.multiselect("Sở thích:", ["Lập trình", "Vẽ", "Kinh doanh", "Viết lách", "Khác"])
+    if st.button("Gợi ý"):
+        if h:
+            res = model.generate_content(f"Dựa trên sở thích {h}, gợi ý 3 nghề nghiệp hot 2026.")
             st.balloons()
             st.write(res.text)
