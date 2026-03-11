@@ -10,12 +10,11 @@ st.set_page_config(page_title="EduMind AI", page_icon="🎓", layout="wide")
 
 # --- QUẢN LÝ API KEY ---
 def get_api_key():
-    # 1. Thử lấy từ môi trường (local .env hoặc system env)
-    key = os.getenv("GEMINI_API_KEY")
-    # 2. Nếu không thấy, thử lấy từ st.secrets (Streamlit Cloud)
-    if not key and "GEMINI_API_KEY" in st.secrets:
-        key = st.secrets["GEMINI_API_KEY"]
-    return key
+    # Thử lấy từ st.secrets trước (ưu tiên trên web)
+    if "GEMINI_API_KEY" in st.secrets:
+        return st.secrets["GEMINI_API_KEY"]
+    # Nếu không có (khi chạy local) thì mới lấy từ env
+    return os.getenv("GEMINI_API_KEY")
 
 key = get_api_key()
 
