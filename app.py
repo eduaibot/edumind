@@ -20,7 +20,7 @@ key = get_api_key()
 
 if key:
     genai.configure(api_key=key)
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
     # Đoạn code này sẽ liệt kê các model bạn có quyền dùng
 else:
     st.error("Cảnh báo: Thiếu GEMINI_API_KEY. Hãy kiểm tra lại file .env hoặc Secrets.")
@@ -78,3 +78,7 @@ elif choice == "Định Hướng Tương Lai":
             res = model.generate_content(f"Dựa trên sở thích {h}, gợi ý 3 nghề nghiệp hot 2026.")
             st.balloons()
             st.write(res.text)
+
+# In ra danh sách model khả dụng vào Log để xem
+for m in genai.list_models():
+    print(m.name)
