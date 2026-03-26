@@ -5,12 +5,9 @@ from dotenv import load_dotenv
 import uuid
 import json
 import sqlite3
-from fpdf import FPDF
 import random
 import re
 import tempfile
-from docx import Document
-from docx.shared import Pt
 from io import BytesIO
 import matplotlib.pyplot as plt
 from PIL import Image
