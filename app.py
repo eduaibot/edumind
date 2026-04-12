@@ -1,693 +1,957 @@
 import streamlit as st
-import random
-import json
+import google.generativeai as genai
 import os
-import streamlit.components.v1 as components
-from datetime import datetime
-import pandas as pd
-
-# --- CẤU HÌNH HỆ THỐNG & FILE ---
-DATA_DIR = "user_data"
-USERS_FILE = os.path.join(DATA_DIR, "users.json")
-DB_FILE = os.path.join(DATA_DIR, "notebooks.json")
-SESSION_FILE = os.path.join(DATA_DIR, "session.json")
-
-if not os.path.exists(DATA_DIR): os.makedirs(DATA_DIR)
-
-# --- 15 THEMES MODERN TECH ---
-THEMES = {
-    "Ocean Blue (G)": {"bg": "#f0f9ff", "main": "#0ea5e9", "text": "#0c4a6e", "border": "#bae6fd", "grad": "linear-gradient(135deg, #e0f2fe 0%, #7dd3fc 100%)", "neon": "0 0 10px #0ea5e9"},
-    "Sakura Pink (G)": {"bg": "#fff0f6", "main": "#f55eb1ff", "text": "#831843", "border": "#fbcfe8", "grad": "linear-gradient(135deg, #fce7f3 0%, #f9a8d4 100%)", "neon": "0 0 10px #ec4899"},
-    "Cyberpunk (G)": {"bg": "#0f172a", "main": "#fde047", "text": "#e2e8f0", "border": "#334155", "grad": "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)", "neon": "0 0 15px #fde047"},
-    "Neon Matrix (G)": {"bg": "#020617", "main": "#22c55e", "text": "#f8fafc", "border": "#064e3b", "grad": "linear-gradient(135deg, #065f46 0%, #022c22 100%)", "neon": "0 0 15px #22c55e"},
-    "Sunset Glow (G)": {"bg": "#fff7ed", "main": "#f97316", "text": "#7c2d12", "border": "#fed7aa", "grad": "linear-gradient(135deg, #ffedd5 0%, #fdba74 100%)", "neon": "0 0 10px #f97316"},
-    "Deep Forest (G)": {"bg": "#f0fdf4", "main": "#20be5a", "text": "#14532d", "border": "#bbf7d0", "grad": "linear-gradient(135deg, #dcfce7 0%, #86efac 100%)", "neon": "0 0 10px #16a34a"},
-    "Royal Purple (G)": {"bg": "#faf5ff", "main": "#a855f7", "text": "#581c87", "border": "#e9d5ff", "grad": "linear-gradient(135deg, #f3e8ff 0%, #d8b4fe 100%)", "neon": "0 0 10px #a855f7"},
-    "Midnight (G)": {"bg": "#f8fafc", "main": "#334155", "text": "#0f172a", "border": "#e2e8f0", "grad": "linear-gradient(135deg, #f1f5f9 0%, #94a3b8 100%)", "neon": "0 0 10px #334155"},
-    "Blood Moon (G)": {"bg": "#1a0505", "main": "#dc2626", "text": "#fee2e2", "border": "#7f1d1d", "grad": "linear-gradient(135deg, #450a0a 0%, #220505 100%)", "neon": "0 0 15px #dc2626"},
-    "Glacier (G)": {"bg": "#f8fafc", "main": "#06b6d4", "text": "#164e63", "border": "#a5f3fc", "grad": "linear-gradient(135deg, #cffafe 0%, #67e8f9 100%)", "neon": "0 0 10px #06b6d4"},
-    "Amethyst (G)": {"bg": "#170f1e", "main": "#c084fc", "text": "#f3e8ff", "border": "#581c87", "grad": "linear-gradient(135deg, #3b0764 0%, #170f1e 100%)", "neon": "0 0 15px #c084fc"},
-    "Lava (G)": {"bg": "#2a0800", "main": "#ef4444", "text": "#ffedd5", "border": "#9a3412", "grad": "linear-gradient(135deg, #7c2d12 0%, #431407 100%)", "neon": "0 0 15px #ef4444"},
-    "Obsidian (G)": {"bg": "#09090b", "main": "#71717a", "text": "#fafafa", "border": "#27272a", "grad": "linear-gradient(135deg, #18181b 0%, #09090b 100%)", "neon": "0 0 10px #71717a"},
-    "Gold Leaf (G)": {"bg": "#fffbeb", "main": "#eab308", "text": "#713f12", "border": "#fde047", "grad": "linear-gradient(135deg, #fef3c7 0%, #fde047 100%)", "neon": "0 0 10px #eab308"},
-    "Toxic (G)": {"bg": "#051f0e", "main": "#84cc16", "text": "#ecfccb", "border": "#3f6212", "grad": "linear-gradient(135deg, #1a2e05 0%, #051f0e 100%)", "neon": "0 0 15px #84cc16"}
-}
-
-# --- TIỆN ÍCH DỮ LIỆU ---
-def load_json(path, default):
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f: return json.load(f)
-    return default
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=4)
-
-def parse_data(raw_text):
-    words = []
-    for line in raw_text.strip().split('\n'):
-        if not line.strip(): continue
-        parts = [p.strip() for p in line.split('-')]
-        # Bỏ STT nếu có
-        if parts and parts[0].isdigit(): parts = parts[1:]
-        
-        # Cấu trúc: [0]Hz - [1]Py - [2]Vn - [3]ExHz - [4]ExPy - [5]ExVn
-        if len(parts) >= 6:
-            words.append({
-                'hz': parts[0], 'py': parts[1], 'vn': parts[2],
-                'ex_hz': parts[3], 'ex_py': parts[4], 'ex_vn': parts[5]
-            })
-        elif len(parts) >= 3: # Hỗ trợ dữ liệu cũ không có ví dụ
-            words.append({
-                'hz': parts[0], 'py': parts[1], 'vn': " - ".join(parts[2:]),
-                'ex_hz': '', 'ex_py': '', 'ex_vn': ''
-            })
-    return words
-
-def get_step_options(n):
-    # Tạo danh sách các lựa chọn kích thước Set: 5, 10, 15... đến n/2
-    # Dùng set() để tránh trùng lặp và sorted() để sắp xếp tăng dần
-    options = [i for i in range(5, (n // 2) + 1, 5)]
-    
-    # Luôn thêm chính n vào để có tùy chọn "Học tất cả"
-    options.append(n)
-    
-    # Loại bỏ trùng lặp (ví dụ n=10 thì n/2 là 5, đã có trong list)
-    unique_options = sorted(list(set(options)))
-    
-    # Đảm bảo slider có ít nhất 2 giá trị để không bị lỗi RangeError
-    if len(unique_options) < 2:
-        return [5, n] if n > 5 else [1, n]
-        
-    return unique_options
-
-def format_to_text_6_cols(words_list):
-    lines = []
-    for i, w in enumerate(words_list, 1):
-        # Thêm STT vào đầu dòng: "1 - Hán - Py - Nghĩa - VD Hán - VD Py - VD Nghĩa"
-        line = f"{i} - {w['hz']} - {w['py']} - {w['vn']} - {w.get('ex_hz','')} - {w.get('ex_py','')} - {w.get('ex_vn','')}"
-        # Xóa các khoảng trắng và dấu gạch dư thừa ở cuối dòng
-        lines.append(line.strip(" -"))
-    return "\n".join(lines)
-
-# --- QUẢN LÝ SESSION & TRẠNG THÁI ---
-if 'users' not in st.session_state: st.session_state.users = load_json(USERS_FILE, {})
-if 'notebooks' not in st.session_state: st.session_state.notebooks = load_json(DB_FILE, {})
-if 'session' not in st.session_state: st.session_state.session = load_json(SESSION_FILE, {"remembered": None})
-
-# Auto-login
-if 'current_user' not in st.session_state:
-    st.session_state.current_user = st.session_state.session.get("remembered")
-
-# --- AUTHENTICATION MODULE ---
-if not st.session_state.current_user:
-    st.title("🔒 HSK System Login")
-    auth_mode = st.radio("Chế độ:", ["Đăng nhập", "Đăng ký"], horizontal=True)
-    username = st.text_input("Username").strip().lower()
-    password = st.text_input("Password", type="password")
-    remember = st.checkbox("Ghi nhớ đăng nhập")
-    
-    if st.button("Xác nhận"):
-        if auth_mode == "Đăng ký":
-            if username in st.session_state.users:
-                st.error("Tài khoản đã tồn tại!")
-            elif username and password:
-                is_admin = (username == "akaide")
-                st.session_state.users[username] = {"password": password, "is_admin": is_admin, "theme": "Ocean Blue (G)"}
-                save_json(USERS_FILE, st.session_state.users)
-                st.success("Đăng ký thành công! Hãy đăng nhập.")
-        else:
-            if username in st.session_state.users and st.session_state.users[username]["password"] == password:
-                st.session_state.current_user = username
-                if remember:
-                    st.session_state.session["remembered"] = username
-                    save_json(SESSION_FILE, st.session_state.session)
-                st.rerun()
-            else:
-                st.error("Sai tài khoản hoặc mật khẩu!")
-    st.stop()
-
-# --- LOAD USER PROGRESS ---
-user = st.session_state.current_user
-user_info = st.session_state.users[user]
-is_admin = user_info.get("is_admin", False)
-PROG_FILE = os.path.join(DATA_DIR, f"progress_{user}.json")
-
-if 'progress' not in st.session_state: 
-    st.session_state.progress = load_json(PROG_FILE, {"history": [], "words": {}, "resume_state": None})
-
-if 'theme_name' not in st.session_state: 
-    st.session_state.theme_name = user_info.get("theme", "Ocean Blue (G)")
-
-# Phục hồi State (Resume)
-if st.session_state.progress["resume_state"] and 'mode' not in st.session_state:
-    for k, v in st.session_state.progress["resume_state"].items():
-        st.session_state[k] = v
-elif 'mode' not in st.session_state:
-    st.session_state.mode = "manage"
-
-def sync_progress():
-    save_json(PROG_FILE, st.session_state.progress)
-
-def save_resume_state():
-    if st.session_state.mode == "study":
-        st.session_state.progress["resume_state"] = {
-            "mode": "study", "qs": st.session_state.qs, "curr_nb": st.session_state.curr_nb, 
-            "idx": st.session_state.idx, "answered": st.session_state.answered, "is_correct": st.session_state.get('is_correct', False)
-        }
-    else:
-        st.session_state.progress["resume_state"] = None
-    sync_progress()
-
-# --- CSS TECH UI ---
-t = THEMES[st.session_state.theme_name]
-st.set_page_config(
-    page_title="HSK Smart 2.0", 
-    page_icon="logo.png",
-    layout="wide"
-)
-
-st.markdown("""
-    <style>
-        /* Ẩn nút 'Manage app' và các hiệu ứng liên quan ở góc dưới */
-        #stDecoration {display:none;}
-        [data-testid="stStatusWidget"] {display:none;}
-        
-        /* Chặn hoàn toàn nút Deploy/Manage app nếu nó xuất hiện ở góc dưới phải hoặc trái */
-        .stAppDeployButton {display:none;}
-        
-        /* Tối ưu không gian nội dung */
-        .block-container {
-            margin-top: 2rem;
-            padding-top: 1rem;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown(f"""
-    <style>
-    .stApp {{ background-color: {t['bg']}; color: {t['text']}; font-family: 'Inter', sans-serif; transition: 0.3s; }}
-    /* Glassmorphism */
-    div[data-testid="stExpander"], .stAlert, div[data-testid="stForm"], .glass-box {{
-        background: rgba(255, 255, 255, 0.4) !important;
-        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-        border: 1px solid {t['border']} !important;
-        border-radius: 15px !important; padding: 15px !important; margin-bottom: 10px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
-    }}
-    .question-container {{ 
-        background: {t['grad']} !important; border-left: 8px solid {t['main']} !important; 
-        text-align: center; border-radius: 20px; padding: 30px; margin-bottom: 15px;
-        box-shadow: {t['neon']}; transition: 0.3s;
-    }}
-    .stButton > button {{ 
-        background-color: {t['main']} !important; color: white !important; 
-        border-radius: 8px !important; border: none; font-weight: bold; transition: 0.3s;
-    }}
-    .stButton > button:hover {{ box-shadow: {t['neon']}; opacity: 0.9; }}
-    .stTextInput input {{ text-align: center; border-radius: 10px !important; font-size: 20px;}}
-    
-    /* Responsive Table */
-    .dataframe {{ width: 100% !important; }}
-    /* Thu nhỏ padding của container chính để tiết kiệm chỗ */
-    .block-container {{ padding-top: 1rem !important; padding-bottom: 0rem !important; }}
-    
-    /* Container đáp án chia đôi */
-    .answer-card {{
-        display: flex;
-        flex-direction: row;
-        gap: 10px;
-        align-items: center;
-        padding: 10px !important;
-        margin-top: 5px !important;
-    }}
-    .ans-left {{ 
-        flex: 1; border-right: 1px solid {t['border']}; 
-        text-align: center; padding-right: 5px;
-    }}
-    .ans-right {{ flex: 1.5; font-size: 0.85rem; line-height: 1.3; }}
-    
-    /* Tối ưu nút Thoát và Tiêu đề trên 1 dòng */
-    .header-container {{
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 10px;
-        flex-wrap: nowrap; /* Ép trên 1 dòng */
-    }}
-    .header-title {{ 
-        font-size: 1rem; font-weight: bold; white-space: nowrap; 
-        overflow: hidden; text-overflow: ellipsis; margin-right: 10px;
-    }}
-    
-    /* Nút kiểm tra nhỏ gọn */
-    .stButton > button[key*="check"] {{
-        padding: 0.2rem 0.5rem !important;
-        font-size: 0.8rem !important;
-    }}
-    </style>
-    
-    """, unsafe_allow_html=True)
-
-# --- AUTO FOCUS JS TRICK ---
-def auto_focus():
-    components.html("""
-        <script>
-        const inputs = parent.document.querySelectorAll('input[type="text"]');
-        if (inputs.length > 0) { inputs[inputs.length - 1].focus(); }
-        </script>
-    """, height=0)
-
-# --- UI QUẢN LÝ ---
+from dotenv import load_dotenv
+import uuid
+import json
+import sqlite3
 import random
-from datetime import datetime
-import pandas as pd
-import streamlit as st
+import re
+import tempfile
+from io import BytesIO
+import matplotlib.pyplot as plt
+from PIL import Image
+import streamlit.components.v1 as components
+import time
 
-if st.session_state.mode == "manage":
+import hashlib
+
+def hash_password(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
     
-    # --- 0. MIGRATION & ĐỒNG BỘ HÓA (FIX TRIỆT ĐỂ BẰNG HÁN TỰ) ---
-    def migrate_to_hz_order():
-        updated = False
-        for name, info in st.session_state.notebooks.items():
-            current_words = info.get('words', [])
-            
-            # Dọn dẹp dữ liệu rác từ các phiên bản cũ
-            if 'fixed_word_order' in info:
-                info['fixed_hz_order'] = [w.get('hz') for w in info['fixed_word_order'] if w.get('hz')]
-                del info['fixed_word_order']
-                updated = True
-                
-            if 'fixed_order_indices' in info:
-                hz_order = []
-                for idx in info['fixed_order_indices']:
-                    if idx < len(current_words):
-                        hz_order.append(current_words[idx].get('hz'))
-                info['fixed_hz_order'] = hz_order
-                del info['fixed_order_indices']
-                updated = True
-                
-        if updated:
-            save_json(DB_FILE, st.session_state.notebooks)
+    
+def create_user(username, password):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("INSERT INTO users (username, password) VALUES (?, ?)", 
+                    (username, hash_password(password)))
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
-    def sync_and_get_ordered_words(nb_name, current_words):
+def login_user(username, password):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE username = ? AND password = ?", 
+              (username, hash_password(password)))
+    data = c.fetchone()
+    conn.close()
+    return data
+
+def inject_custom_ui():
+    # 1. CSS cố định nút Dừng ở đáy màn hình
+    st.markdown(
         """
-        Hàm cốt lõi: Khóa trật tự bằng Hán tự.
-        - Lần đầu: Lấy 60 từ đầu -> shuffle, phần còn lại -> shuffle. Lưu mảng Hán tự.
-        - Các lần sau: Lấy đúng trật tự đã lưu. Từ nào mới thêm sẽ bị ném xuống cuối.
-        """
-        if 'fixed_hz_order' not in st.session_state.notebooks[nb_name]:
-            st.session_state.notebooks[nb_name]['fixed_hz_order'] = []
-            
-        saved_hzs = st.session_state.notebooks[nb_name]['fixed_hz_order']
-        current_dict = {w['hz']: w for w in current_words}
-        need_save = False
-        
-        # 1. Khởi tạo lần đầu
-        if not saved_hzs and current_words:
-            sorted_words = current_words
-            part1 = [w['hz'] for w in sorted_words[:60]]
-            part2 = [w['hz'] for w in sorted_words[60:]]
-            random.shuffle(part1)
-            random.shuffle(part2)
-            
-            saved_hzs = part1 + part2
-            st.session_state.notebooks[nb_name]['fixed_hz_order'] = saved_hzs
-            need_save = True
-
-        # 2. Quét xem có từ nào mới được thêm vào không
-        saved_set = set(saved_hzs)
-        new_hzs = [w['hz'] for w in current_words if w['hz'] not in saved_set]
-        if new_hzs:
-            random.shuffle(new_hzs) # Xáo trộn đám từ mới
-            saved_hzs.extend(new_hzs) # Nối vào đuôi, không làm hỏng Set cũ
-            st.session_state.notebooks[nb_name]['fixed_hz_order'] = saved_hzs
-            need_save = True
-            
-        if need_save:
-            save_json(DB_FILE, st.session_state.notebooks)
-            
-        # 3. Trả về mảng words hoàn chỉnh theo đúng trật tự Hán tự đã khóa
-        ordered_words = []
-        for hz in saved_hzs:
-            if hz in current_dict: # Rất an toàn: Nếu bạn lỡ xóa từ trong list gốc, nó sẽ tự bỏ qua
-                ordered_words.append(current_dict[hz])
-                
-        return ordered_words
-
-    # --- 1. HÀM TẠO QUIZ ---
-    def get_smart_quiz(ordered_words, start_idx=0, end_idx=None):
-        if end_idx is None: end_idx = len(ordered_words)
-        selected_words = ordered_words[start_idx:end_idx]
-        
-        quiz_pool = []
-        for w in selected_words:
-            quiz_pool.append({'q': w['hz'].capitalize(), 'a': w['vn'], 'f': w, 'type': 'hz_vn'})
-            quiz_pool.append({'q': w['vn'].capitalize(), 'a': w['hz'], 'f': w, 'type': 'vn_hz'})
-        
-        random.shuffle(quiz_pool) # Chỉ xáo trộn câu hỏi bên trong Set lúc làm bài
-        return quiz_pool
-
-    # Chạy dọn rác ngay khi vào trang
-    migrate_to_hz_order()
-    
-    # --- UI HEADER ---
-    col1, col2 = st.columns([6, 1])
-    col1.title(f"🚀 Làm tí HSK [{user}]")
-    if col2.button("Đăng xuất"):
-        st.session_state.session["remembered"] = None
-        save_json(SESSION_FILE, st.session_state.session)
-        for key in list(st.session_state.keys()): del st.session_state[key]
-        st.rerun()
-
-    # --- CÀI ĐẶT & LỊCH SỬ ---
-    with st.expander("🎨 Cài đặt & Lịch sử"):
-        c_th, c_his, c_download = st.columns(3)
-        with c_th:
-            theme_choice = st.selectbox("Giao diện:", list(THEMES.keys()), index=list(THEMES.keys()).index(st.session_state.theme_name))
-            if theme_choice != st.session_state.theme_name:
-                st.session_state.theme_name = theme_choice
-                st.session_state.users[user]["theme"] = theme_choice
-                save_json(USERS_FILE, st.session_state.users)
-                st.rerun()
-        with c_his:
-            total_learned = len([k for k, v in st.session_state.progress["words"].items() if v != 0])
-            st.metric("Số từ đã tiếp xúc", total_learned)
-        with open("user_data/notebooks.json", "rb") as f:
-            c_download.download_button(
-                label="Tải dữ liệu JSON",
-                data=f,
-                file_name="notebooks.json",
-                mime="application/json"
-            )
-
-    # --- ADMIN: TẠO SỔ TAY ---
-    if is_admin:
-        with st.expander("🛠️ Tạo Sổ Tay (Admin Only)"):
-            n_name = st.text_input("Tên sổ tay:")
-            n_data = st.text_area("Dữ liệu (Hán - Py - Nghĩa...):", height=100)
-            if st.button("Lưu Sổ Tay"):
-                if n_name and n_data:
-                    st.session_state.notebooks[n_name] = {
-                        'words': parse_data(n_data), 
-                        'updated_at': datetime.now().isoformat(), 
-                        'last_accessed': datetime.now().isoformat(),
-                        'fixed_hz_order': [] # Mảng rỗng, sẽ tự sinh khi load
-                    }
-                    save_json(DB_FILE, st.session_state.notebooks)
-                    st.success("Đã tạo sổ tay!")
-                    st.rerun()
-
-    # --- DANH SÁCH SỔ TAY ---
-    if st.session_state.notebooks:
-        sorted_nbs = sorted(st.session_state.notebooks.items(), key=lambda x: str(x[1].get('last_accessed', '')), reverse=True)
-        
-        for idx, (name, info) in enumerate(sorted_nbs, 1):
-            raw_words = info['words']
-            # BƯỚC QUAN TRỌNG: Đồng bộ và lấy mảng từ vựng đã được khóa chặt trật tự
-            ordered_words = sync_and_get_ordered_words(name, raw_words)
-            
-            sticker = ["📚", "🔥", "⚡", "🌟", "🧠"][idx % 5]
-            
-            with st.container():
-                st.markdown(f"### {sticker} {name} <span style='font-size:0.5em; color:gray'>({len(ordered_words)} từ)</span>", unsafe_allow_html=True)
-                c1, c2, c3, c4 = st.columns([1.5, 1.5, 1, 1])
-                
-                # --- NÚT HỌC NGAY (Top 60) ---
-                if c1.button("📖 Học ngay", key=f"std_{name}", use_container_width=True):
-                    st.session_state.notebooks[name]['last_accessed'] = datetime.now().isoformat()
-                    quiz = get_smart_quiz(ordered_words, 0, 60)
-                    st.session_state.update({"qs": quiz, "curr_nb": f"{name} (Top 60)", "mode": "study", "idx": 0, "answered": False})
-                    save_resume_state()
-                    st.rerun()
-                
-                # --- NÚT XEM DANH SÁCH (Sắp xếp A-Z Pinyin) ---
-                if c2.button("📑 Danh sách", key=f"vw_{name}", use_container_width=True):
-                    st.session_state.view_nb = name if st.session_state.get('view_nb') != name else None
-                    st.rerun()
-
-                import unicodedata
-
-                def remove_accents(input_str):
-                    """Chuyển 'ā' thành 'a', 'ò' thành 'o' để sắp xếp chuẩn A-Z"""
-                    if not isinstance(input_str, str):
-                        return ""
-                    # Chuẩn hóa Unicode về dạng NFD (tách chữ và dấu)
-                    nfkd_form = unicodedata.normalize('NFKD', input_str)
-                    # Chỉ giữ lại các ký tự không phải là dấu (non-spacing mark)
-                    return "".join([c for c in nfkd_form if not unicodedata.combining(c)])
-
-                if st.session_state.get('view_nb') == name:
-                    with st.container():
-                        st.markdown(f"#### 📖 Tra cứu từ vựng: {name}")
-                        df_view = pd.DataFrame(raw_words)
-                        
-                        if not df_view.empty:
-                            # TẠO CỘT TẠM ĐỂ SORT: Loại bỏ dấu và chuyển về chữ thường
-                            df_view['sort_key'] = df_view['py'].apply(lambda x: remove_accents(x).lower())
-                            
-                            # Sắp xếp theo cột tạm đó
-                            df_view = df_view.sort_values(by='sort_key').reset_index(drop=True)
-                            df_view.index += 1
-                            
-                            # Hiển thị bảng (loại bỏ cột sort_key khi show)
-                            st.dataframe(
-                                df_view[['hz', 'py', 'vn']], 
-                                column_config={
-                                    "hz": "Hán tự",
-                                    "py": "Pinyin",
-                                    "vn": "Nghĩa Việt"
-                                },
-                                use_container_width=True, height=400
-                            )
-                        else:
-                            st.info("Trống.")
-
-                    if st.button("✖️ Đóng", key=f"close_view_{name}"):
-                        st.session_state.view_nb = None
-                        st.rerun()
-            
-                # --- QUẢN LÝ ADMIN: SỬA VÀ XÓA ---
-                if is_admin:
-                    if c3.button("🤕 Sửa", key=f"ed_{name}", use_container_width=True):
-                        st.session_state.editing_nb = name if st.session_state.get("editing_nb") != name else None
-                        st.rerun()
-                    
-                    conf_k = f"conf_del_{name}"
-                    if not st.session_state.get(conf_k):
-                        if c4.button("😵 Xóa", key=f"dl_{name}", use_container_width=True):
-                            st.session_state[conf_k] = True
-                            st.rerun()
-                    else:
-                        cy, cn = c4.columns(2)
-                        if cy.button("✅", key=f"y_{name}"):
-                            del st.session_state.notebooks[name]
-                            save_json(DB_FILE, st.session_state.notebooks)
-                            st.rerun()
-                        if cn.button("❌", key=f"n_{name}"):
-                            st.session_state[conf_k] = False
-                            st.rerun()
-
-                # --- FORM SỬA SỔ TAY ---
-                if st.session_state.get("editing_nb") == name:
-                    with st.form(key=f"f_edit_{name}"):
-                        new_n = st.text_input("Tên mới:", value=name)
-                        new_d = st.text_area("Dữ liệu:", value=format_to_text_6_cols(raw_words), height=250)
-                        if st.form_submit_button("Lưu ✅"):
-                            if new_n != name: 
-                                st.session_state.notebooks.pop(name)
-                            st.session_state.notebooks[new_n] = {
-                                'words': parse_data(new_d), 
-                                'updated_at': datetime.now().isoformat(),
-                                'last_accessed': datetime.now().isoformat(),
-                                # ĐẶC BIỆT: Bê nguyên trật tự cũ sang, không reset. Hàm sync sẽ lo phần còn lại.
-                                'fixed_hz_order': info.get('fixed_hz_order', []) 
-                            }
-                            save_json(DB_FILE, st.session_state.notebooks)
-                            st.session_state.editing_nb = None
-                            st.rerun()
-
-                # --- CHIA SET ---
-                with st.expander("🧩 Chia nhỏ bài học (Smart Sets)"):
-                    total_w = len(ordered_words)
-                    step_opts = get_step_options(total_w)
-                    chunk = st.select_slider("Số từ mỗi Set:", options=step_opts, key=f"s_{name}", value=min(10, total_w))
-                    
-                    num_sets = (total_w + chunk - 1) // chunk
-
-                    for r_idx in range(0, num_sets, 3):
-                        cols = st.columns(3)
-                        for c_idx in range(3):
-                            s_idx = r_idx + c_idx
-                            if s_idx < num_sets:
-                                start_i = s_idx * chunk
-                                end_i = min(start_i + chunk, total_w)
-                                
-                                # Cắt trực tiếp từ mảng đã khóa trật tự
-                                subset = ordered_words[start_i:end_i]
-                                
-                                mastered = sum(1 for w in subset if st.session_state.progress["words"].get(w['hz'], 0) >= 3)
-                                rate = mastered / len(subset) if subset else 0
-                                color = "#22c55e" if rate >= 0.8 else ("#3b82f6" if rate >= 0.4 else "#475569")
-                                
-                                btn_k = f"btn_set_{name}_{start_i}"
-                                st.markdown(f"<style>button[key='{btn_k}']{{background:{color}!important; color:white!important; min-height:4rem;}}</style>", unsafe_allow_html=True)
-                                
-                                if cols[c_idx].button(f"Set {s_idx+1}\n({start_i+1}-{end_i})\n✅ {mastered}/{len(subset)}", key=btn_k, use_container_width=True):
-                                    quiz = get_smart_quiz(ordered_words, start_i, end_i)
-                                    st.session_state.update({
-                                        "qs": quiz, 
-                                        "curr_nb": f"{name} ({start_i} -> {end_i})", 
-                                        "mode": "study", "idx": 0, "answered": False
-                                    })
-                                    save_resume_state()
-                                    st.rerun()
-                                    
-# --- UI ÔN TẬP (MOBI-OPTIMIZED) ---
-elif st.session_state.mode == "study":
-    total = len(st.session_state.qs)
-    curr_idx = st.session_state.idx
-    
-    # --- 1. CSS TỐI ƯU GIAO DIỆN ---
-    st.markdown(f"""
         <style>
-        /* Làm đậm thanh Progress */
-        div[data-testid="stProgress"] > div > div > div > div {{
-            background-color: {t['main']} !important; height: 12px !important;
-        }}
-        /* Container đáp án chia 2 phần */
-        .answer-card {{
-            display: flex; flex-direction: row; gap: 12px;
-            padding: 12px !important; align-items: flex-start; margin-top: 10px;
-        }}
-        .ans-left {{ 
-            flex: 1; border-right: 1px solid {t['border']}; 
-            padding-right: 10px; text-align: center;
-        }}
-        .ans-right {{ flex: 1.5; font-size: 0.85rem; padding-left: 5px; }}
-        /* Ép header 1 dòng */
-        .study-header {{
-            display: flex; justify-content: space-between; align-items: center;
-            flex-wrap: nowrap; gap: 10px; margin-bottom: 5px;
-        }}
+        div[data-testid="stButton"] button:has(div:contains("Dừng câu trả lời")) {
+            position: fixed !important;
+            bottom: 30px !important;
+            left: 50% !important;
+            transform: translateX(-50%) !important;
+            width: 80% !important;
+            max-width: 700px !important;
+            z-index: 999999 !important;
+            background-color: #ff4b4b !important;
+            color: black;
+            border-radius: 10px !important;
+            border: none !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2) !important;
+        }
+        /* 1. Căn phải tin nhắn của User (Dựa vào việc có chứa icon 🐱) */
+    div[data-testid="stChatMessage"]:has(div:contains("🐱")) {
+        flex-direction: row-reverse; /* Đưa avatar sang bên phải */
+    }
+    
+    div[data-testid="stChatMessage"]:has(div:contains("🐱")) > div:nth-child(2) {
+        max-width: 50%; /* Giới hạn chiều rộng 50% */
+        margin-left: auto; /* Đẩy khối chat sang phải */
+        text-align: left; /* Chữ bên trong vẫn căn trái để dễ đọc */
+        background-color: #f0f2f6; /* Đổi màu nền cho phân biệt (tuỳ chọn) */
+        padding: 15px;
+        border-radius: 15px;
+    }
+
+    /* 2. Cố định container chứa nút Dừng (Tránh bị đẩy lên) */
+    .fixed-action-container {
+        position: fixed;
+        bottom: 3rem; /* Cách đáy một khoảng bằng chat_input */
+        left: 50%;
+        transform: translateX(-50%);
+        width: 100%;
+        max-width: 730px; /* Chỉnh theo độ rộng layout của bạn */
+        z-index: 9999;
+        padding: 10px;
+        background-color: white; /* Che lấp nội dung cuộn bên dưới */
+    }
+    
+    /* Ẩn bớt khoảng trắng dư thừa do Streamlit tạo ra ở cuối trang */
+    #end-of-chat { padding-bottom: 120px; }
+    /* Nút dừng câu trả lời cố định ở đáy, thay thế vị trí thanh chat */
+        .stop-container {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 100%;
+            max-width: 730px;
+            z-index: 9999;
+            padding: 0 20px;
+        }
+        .stButton > button[kind="primary"] { /* Giả lập style nút dừng */
+            background-color: #ff4b4b !important;
+            color: black;
+            border-radius: 20px !important;
+            height: 45px;
+        }
+        /* Căn phải cho User */
+        div[data-testid="stChatMessage"]:has(div:contains("🐱")) {
+            flex-direction: row-reverse;
+        }
+        div[data-testid="stChatMessage"]:has(div:contains("🐱")) > div:nth-child(2) {
+            max-width: 70%;
+            margin-left: auto;
+            background-color: #f0f2f6;
+            padding: 15px;
+            border-radius: 15px;
+        }
         </style>
-    """, unsafe_allow_html=True)
-
-    # --- 2. HEADER: Tên chủ đề + STT + Nút Thoát ---
-    st.markdown(f'<div class="study-header">', unsafe_allow_html=True)
-    col_h, col_ex = st.columns([4, 1])
-    with col_h:
-        st.markdown(f"#### 📖 {st.session_state.curr_nb.upper()} <span style='font-size:0.7em; color:gray'>({curr_idx+1}/{total})</span>", unsafe_allow_html=True)
-    with col_ex:
-        if st.button("✖", help="Thoát", use_container_width=True):
-            st.session_state.mode = "manage"
-            st.session_state.progress["resume_state"] = None
-            sync_progress()
-            st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    if curr_idx < total:
-        q = st.session_state.qs[curr_idx]
-        st.progress((curr_idx) / total)
+    """,
+        unsafe_allow_html=True,
+    )
+    # 2. JS tối ưu để tìm đúng khung cuộn (Scroll Container)
+    components.html(
+        """
+        <script>
+        const parentDoc = window.parent.document;
+        function scrollToBottom() {
+            // Tìm tất cả các vùng có khả năng cuộn trong Streamlit
+            const selectors = [
+                '.main .stVerticalBlock',
+                'section.main',
+                '.stAppViewMain',
+                '.main'
+            ];
+            for (let s of selectors) {
+                const el = parentDoc.querySelector(s);
+                if (el && el.scrollHeight > el.clientHeight) {
+                    el.scrollTo({
+                        top: el.scrollHeight + 10000,
+                        behavior: 'smooth'
+                    });
+                }
+            }
+        }
+        // Tạo nút nếu chưa có
         
-        # Câu hỏi to, rõ ràng
-        st.markdown(f'<div class="question-container"><h3 style="margin:0; font-size:1.8rem; text-align:center; font-weight: 600">{q["q"]}</h3></div>', unsafe_allow_html=True)
-        
-        # --- 3. INPUT & NÚT KIỂM TRA (Nút nằm bên trái) ---
-        # Tỷ lệ [1, 4] để nút Check nhỏ và nằm bên trái, nếu màn hình quá hẹp sẽ tự xuống dòng
-        st.markdown(f"""
-            <style>
-            /* Ép nút Primary có nền màu chủ đạo, chữ trắng, không bị nền trắng */
-            .stButton > button[data-testid="baseButton-primary"] {{
-                background-color: {t['main']} !important;
-                color: white !important;
-                border: none !important;
-                width: 100% !important;
-                height: 3rem !important;
-            }}
-            /* Hiệu ứng khi di chuột */
-            .stButton > button[data-testid="baseButton-primary"]:hover {{
-                opacity: 0.9;
-                color: white !important;
-            }}
-            </style>
-        """, unsafe_allow_html=True)
-        with st.form(key=f"study_form_{curr_idx}", border=False):
-            c_btn, c_input = st.columns([1, 4])
-            
-            with c_input:
-                u_ans = st.text_input(
-                    "Nhập đáp án:", 
-                    key=f"ans_{curr_idx}", 
-                    label_visibility="collapsed", 
-                    placeholder="Gõ câu trả lời..."
-                ).strip()
+        </script>
+        """,
+        height=0,
+    )
+def scroll_to_bottom():
+    # Đoạn Script này sẽ tìm vùng nội dung chính của Streamlit và kéo xuống cuối
+    components.html(
+        """
+        <script>
+            var scrollInterval = setInterval(function() {
+                var mainPane = window.parent.document.querySelector('.main');
+                if (mainPane) {
+                    mainPane.scrollTo({ top: mainPane.scrollHeight, behavior: 'smooth' });
+                    clearInterval(scrollInterval);
+                }
+            }, 100); // Thử lại sau mỗi 100ms cho đến khi tìm thấy
+        </script>
+        """,
+        height=0,
+    )
+# Gọi CSS để hỗ trợ cuộn mượt
+st.markdown(
+    "<style> html { scroll-behavior: smooth; } </style>", unsafe_allow_html=True
+)# --- CẤU HÌNH DATABASE VÀ KHỞI TẠO (GIỮ NGUYÊN) ---
+DB_FILE = "edumind_history.db"
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Bảng người dùng
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY, 
+                    password TEXT)""")
+    
+    # Bảng chats: Thêm cột username để phân biệt
+    c.execute("""CREATE TABLE IF NOT EXISTS chats (
+                    id TEXT PRIMARY KEY, 
+                    username TEXT, 
+                    title TEXT, 
+                    messages TEXT)""")
+    
+    c.execute("CREATE TABLE IF NOT EXISTS health_log (id TEXT, username TEXT, mood TEXT, note TEXT, date TEXT)")
+    conn.commit()
+    conn.close()
 
-            with c_btn:
-                if not st.session_state.get('answered'):
-                    # Dùng form_submit_button để click 1 phát ăn ngay
-                    # type="primary" sẽ làm nút có màu nền (không bị nền trắng viền xanh)
-                    check_clicked = st.form_submit_button("✅", type="primary")
+
+def save_chat_to_db(chat_id, username, title, messages):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR REPLACE INTO chats (id, username, title, messages) VALUES (?, ?, ?, ?)",
+        (chat_id, username, title, json.dumps(messages)),
+    )
+    conn.commit()
+    conn.close()
+    
+def load_all_chats_from_db(username):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Chỉ lấy chat có username trùng với người đang đăng nhập
+    c.execute("SELECT id, title, messages FROM chats WHERE username = ?", (username,))
+    rows = c.fetchall()
+    conn.close()
+    # Trả về dictionary để lưu vào session_state
+    return {row[0]: {"title": row[1], "messages": json.loads(row[2])} for row in rows}
+
+def delete_chat_from_db(chat_id):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Lỗi khi xoá database: {e}")
+        return False
+load_dotenv()
+init_db()
+st.set_page_config(page_title="EduMind AI", page_icon="🎓", layout="wide")
+API_KEYS = []
+for i in range(1, 4):
+    k = os.getenv(f"GEMINI_API_KEY_{i}") or st.secrets.get(
+        f"GEMINI_API_KEY_{i}")
+    if k:
+        API_KEYS.append(k)
+if not API_KEYS:
+    st.error("❌ Thiếu cấu hình API Key")
+    st.stop()
+MODELS_FAST = ["models/gemini-3-flash-preview", "models/gemini-2.5-flash"]
+MODELS_THINKING = ["models/gemini-3.1-flash-lite-preview"]
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
+if "all_chats" not in st.session_state:
+    st.session_state.all_chats = {}
+if "all_chats" not in st.session_state:
+    db_chats = load_all_chats_from_db()
+    if db_chats:
+        st.session_state.all_chats = db_chats
+        st.session_state.current_chat_id = list(db_chats.keys())[-1]
+    else:
+        st.session_state.all_chats = {}
+        new_id = str(uuid.uuid4())
+        st.session_state.all_chats[new_id] = {
+            "title": "Trò chuyện mới", "messages": []}
+        st.session_state.current_chat_id = new_id
+if "current_chat_id" not in st.session_state:
+    st.session_state.current_chat_id = None
+if "key_index" not in st.session_state:
+    st.session_state.key_index = 0
+# Khởi tạo state điều khiển nếu chưa có
+if "stop_ai" not in st.session_state:
+    st.session_state.stop_ai = False
+if "ai_thinking" not in st.session_state:
+    st.session_state.ai_thinking = False
+def call_gemini_retry(prompt, mode, history=[]):
+    model_list = MODELS_FAST if mode == "Nhanh" else MODELS_THINKING
+    gemini_history = [
+        {"role": "user" if m["role"] ==
+            "user" else "model", "parts": [m["content"]]}
+        for m in history
+    ]
+    for _ in range(len(API_KEYS)):
+        genai.configure(api_key=API_KEYS[st.session_state.key_index])
+        for model_name in model_list:
+            try:
+                model = genai.GenerativeModel(model_name)
+                chat = model.start_chat(history=gemini_history)
+                response = chat.send_message(prompt)
+                return response.text, model_name
+            except:
+                continue
+        st.session_state.key_index = (
+            st.session_state.key_index + 1) % len(API_KEYS)
+    return None, None
+# --- GIAO DIỆN CHÍNH ---
+# --- TRONG PHẦN GIAO DIỆN CHÍNH (Sidebar) ---
+with st.sidebar:
+    # 1. Header - Tớ để header ở đây để giữ thương hiệu, 
+    # nhưng nếu cậu muốn ẩn luôn thì đưa nó vào trong if phía dưới nhé.
+    st.markdown(
+        '<div class="sidebar-header"><h1>🎓</h1><h2>EduMind</h2></div>',
+        unsafe_allow_html=True,
+    )
+    
+    if not st.session_state.logged_in:
+        auth_mode = st.tabs(["Đăng nhập", "Đăng ký"])
+        
+        with auth_mode[0]:
+            user_login = st.text_input("Tên đăng nhập", key="login_user")
+            pass_login = st.text_input("Mật khẩu", type="password", key="login_pass")
+            # Trong phần Sidebar -> tab Đăng nhập
+            if st.button("Đăng nhập", use_container_width=True):
+                user_data = login_user(user_login, pass_login)
+                if user_data:
+                    # 1. Thiết lập trạng thái đăng nhập
+                    st.session_state.logged_in = True
+                    st.session_state.username = user_login
+                    
+                    # 2. Tải lịch sử chat RIÊNG của user này từ DB
+                    user_chats = load_all_chats_from_db(user_login)
+                    st.session_state.all_chats = user_chats
+                    
+                    # 3. Chọn cuộc trò chuyện gần nhất để hiển thị
+                    if user_chats:
+                        st.session_state.current_chat_id = list(user_chats.keys())[-1]
+                    else:
+                        st.session_state.current_chat_id = None
+                        
+                    st.success(f"Chào mừng {user_login} quay trở lại!")
+                    time.sleep(0.5) # Đợi một chút để user thấy thông báo
+                    st.rerun()
                 else:
-                    # Sau khi trả lời, nút Tiếp theo thế chỗ
-                    if st.form_submit_button("➡️", type="primary"):
-                        st.session_state.idx += 1
-                        st.session_state.answered = False
-                        save_resume_state()
+                    st.error("Sai tài khoản hoặc mật khẩu")
+                    
+        with auth_mode[1]:
+            user_reg = st.text_input("Tên đăng nhập mới", key="reg_user")
+            pass_reg = st.text_input("Mật khẩu mới", type="password", key="reg_pass")
+            confirm_pass = st.text_input("Xác nhận mật khẩu", type="password")
+            if st.button("Tạo tài khoản", use_container_width=True):
+                if pass_reg != confirm_pass:
+                    st.warning("Mật khẩu không khớp")
+                elif create_user(user_reg, pass_reg):
+                    st.success("Tạo tài khoản thành công! Hãy đăng nhập.")
+                else:
+                    st.error("Tên đăng nhập đã tồn tại")
+    else:
+        # Giao diện khi đã đăng nhập
+        st.write(f"👤 Tài khoản: **{st.session_state.username}**")
+        if st.sidebar.button("Đăng xuất"):
+            st.session_state.logged_in = False
+            st.session_state.username = ""
+            st.session_state.all_chats = {} # Xóa lịch sử hiển thị
+            st.session_state.current_chat_id = None
+            st.rerun()
+            
+    st.divider()
+
+    # 2. Ô chọn tính năng (LUÔN HIỆN)
+    choice = st.selectbox("Tính năng", ["Giải Bài Tập AI", "Tâm Lí & Sức Khoẻ", "Định Hướng Tương Lai"])
+
+    # ---------------------------------------------------------
+    # CHỈ HIỆN NẾU LÀ GIẢI BÀI TẬP AI
+    # ---------------------------------------------------------
+    if choice == "Giải Bài Tập AI":
+        ai_mode = st.radio("Chế độ:", ["Nhanh", "Tư duy"], horizontal=True)
+        st.divider()
+        
+        if st.button("➕ Cuộc trò chuyện mới", use_container_width=True):
+            st.session_state.current_chat_id = None  # Reset về màn hình Home
+            st.rerun()
+            
+        st.subheader("📜 Lịch sử")
+        
+        # Khởi tạo trạng thái đang sửa tên chat
+        if "editing_chat_id" not in st.session_state:
+            st.session_state.editing_chat_id = None
+
+        # Hiển thị danh sách lịch sử (Đảo ngược để cái mới nhất lên đầu)
+        for chat_id, data in list(st.session_state.all_chats.items())[::-1]:
+            # Chế độ SỬA TÊN
+            if st.session_state.editing_chat_id == chat_id:
+                new_title = st.text_input("Sửa tên:", value=data["title"], key=f"edit_in_{chat_id}")
+                col_save, col_cancel = st.columns(2)
+                if col_save.button("Lưu", key=f"save_{chat_id}", use_container_width=True):
+                    st.session_state.all_chats[chat_id]["title"] = new_title
+                    save_chat_to_db(
+                        chat_id, 
+                        st.session_state.username, # Thêm cái này
+                        st.session_state.all_chats[chat_id]["title"], 
+                        data["messages"]
+                    )
+                    st.session_state.editing_chat_id = None
+                    st.rerun()
+                if col_cancel.button("Huỷ", key=f"cancel_{chat_id}", use_container_width=True):
+                    st.session_state.editing_chat_id = None
+                    st.rerun()
+            
+            # Chế độ HIỂN THỊ BÌNH THƯỜNG
+            else:
+                col_btn, col_edit, col_del = st.columns([0.65, 0.175, 0.175])
+                with col_btn:
+                    is_active = chat_id == st.session_state.current_chat_id
+                    display_name = data["title"][:25]
+                    if st.button(
+                        display_name,
+                        key=f"sel_{chat_id}",
+                        use_container_width=True,
+                        type="primary" if is_active else "secondary",
+                    ):
+                        st.session_state.current_chat_id = chat_id
+                        st.rerun()
+                
+                with col_edit:
+                    if st.button("✏️", key=f"edit_btn_{chat_id}", help="Đổi tên"):
+                        st.session_state.editing_chat_id = chat_id
+                        st.rerun()
+                
+                with col_del:
+                    if st.button("🗑️", key=f"del_{chat_id}", help="Xoá chat"):
+                        del st.session_state.all_chats[chat_id]
+                        delete_chat_from_db(chat_id)
+                        if st.session_state.current_chat_id == chat_id:
+                            st.session_state.current_chat_id = None
+                        st.rerun()
+                        
+                        
+# --- THÊM CSS ĐỂ ĐỔI MÀU VIỀN THANH CHAT ---
+st.markdown(
+    """
+    
+<style>
+html {
+        scroll-behavior: smooth;
+    }
+/* ===== FONT & GLOBAL ===== */
+html, body, [class*="css"]  {
+    font-family: 'Segoe UI', 'Roboto', sans-serif;
+    background: linear-gradient(135deg, #f5f7fa, #e4ecf7);
+}
+/* ===== SIDEBAR ===== */
+.sidebar-header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+.sidebar-header h1 {
+    font-size: 40px;
+    margin-bottom: 0;
+}
+.sidebar-header h2 {
+    font-weight: 600;
+    color: #4A90E2;
+    letter-spacing: 1px;
+}
+/* ===== BUTTON CHAT LIST ===== */
+div[data-testid="stVerticalBlock"] div[data-testid="stColumn"] button {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    display: block !important;
+    text-align: left !important;
+    border-radius: 10px !important;
+    transition: all 0.25s ease;
+}
+/* Hover hiệu ứng gaming nhẹ */
+div[data-testid="stVerticalBlock"] div[data-testid="stColumn"] button:hover {
+    transform: translateX(4px);
+    background: linear-gradient(90deg, #e3f2fd, #f0f7ff);
+}
+/* Active chat */
+button[kind="primary"] {
+    border: 2px solid #00c6ff !important;
+    background: linear-gradient(90deg, #e0f7ff, #f5fbff) !important;
+    box-shadow: 0 0 12px rgba(0,198,255,0.5);
+}
+/* ===== CHAT BUBBLE ===== */
+[data-testid="stChatMessage"] {
+    border-radius: 18px;
+    margin-bottom: 12px;
+    transition: all 0.2s ease;
+}
+/* USER MESSAGE */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    flex-direction: row-reverse;
+}
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) .stChatMessageContent {
+    background: linear-gradient(135deg, #4facfe, #00f2fe);
+    color: black;
+    border-radius: 18px 18px 0 18px;
+    margin-left: 20%;
+    box-shadow: 0 0 10px rgba(0,150,255,0.3);
+}
+div[st-target="secondary"] button {
+    background-color: #ff4b4b !important;
+    color: black;
+    border-radius: 20px;
+}
+/* AI MESSAGE */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) .stChatMessageContent {
+    background: rgba(255,255,255,0.7);
+    backdrop-filter: blur(10px);
+    color: #1F2937;
+    border-radius: 18px 18px 18px 0;
+    margin-right: 20%;
+    border: 1px solid rgba(200,200,200,0.3);
+}
+/* ===== INPUT BOX ===== */
+textarea {
+    border-radius: 5px !important;
+    border: 1px solid #cfd9e6 !important;
+    box-shadow: 0 0 6px rgba(0,0,0,0.05);
+    padding: 2px 6px;
+}
+/* ===== SUGGESTION BUTTON ===== */
+.sug-btn button {
+    background: none !important;
+    border: none !important;
+    color: #007BFF !important;
+    padding: 4px 0 !important;
+    font-style: italic !important;
+    text-align: left !important;
+    transition: 0.2s;
+}
+/* Hover glow */
+.sug-btn button:hover {
+    color: #00c6ff !important;
+    text-shadow: 0 0 5px rgba(0,198,255,0.6);
+    transform: translateX(5px);
+}
+/* ===== SCROLL BAR (gaming feel) ===== */
+::-webkit-scrollbar {
+    width: 8px;
+}
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(#4facfe, #00f2fe);
+    border-radius: 10px;
+}
+/* ===== CARD EFFECT (glass) ===== */
+[data-testid="stChatMessage"] .stChatMessageContent {
+    padding: 12px 14px;
+}
+/* ===== ANIMATION ===== */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+[data-testid="stChatMessage"] {
+    animation: fadeIn 0.3s ease;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+# --- MODULE CHÍNH ---
+if choice == "Giải Bài Tập AI":
+    inject_custom_ui()
+    
+    # Khởi tạo mặc định nếu mới vào web
+    if "current_chat_id" not in st.session_state:
+        st.session_state.current_chat_id = None # Mặc định là Home
+        
+    curr_id = st.session_state.current_chat_id
+
+    # ---------------------------------------------------------
+    # TRƯỜNG HỢP 1: MÀN HÌNH HOME (Chưa chọn/có đoạn chat nào)
+    # ---------------------------------------------------------
+    if curr_id is None:
+        # Giao diện chào mừng giống Gemini
+        st.markdown("<h2 style='text-align: center; margin-top: 10vh;'>✨ Chúng ta nên bắt đầu từ đâu nhỉ?</h2>", unsafe_allow_html=True)
+        
+        # Nhập câu hỏi đầu tiên
+        home_input = st.chat_input("Nhập câu hỏi để bắt đầu cuộc trò chuyện mới...")
+        if home_input:
+            # Tạo chat mới
+            new_id = str(uuid.uuid4())
+            st.session_state.all_chats[new_id] = {
+                "title": home_input[:25], 
+                "messages": []
+            }
+            # Chuyển ID hiện tại sang chat mới và truyền input đi
+            st.session_state.current_chat_id = new_id
+            st.session_state.pending_input = home_input
+            st.rerun() # Rerun để chuyển sang màn hình chat (Trường hợp 2)
+
+    # ---------------------------------------------------------
+    # TRƯỜNG HỢP 2: ĐANG TRONG 1 CUỘC TRÒ CHUYỆN
+    # ---------------------------------------------------------
+    else:
+        # (Khởi tạo state pending_input, ai_thinking... như code cũ của bạn)
+        if "pending_input" not in st.session_state:
+            st.session_state.pending_input = None
+        if "ai_thinking" not in st.session_state:
+            st.session_state.ai_thinking = False
+        if "stop_ai" not in st.session_state:
+            st.session_state.stop_ai = False
+            
+        messages = st.session_state.all_chats[curr_id]["messages"]
+
+        def handle_stop():
+            st.session_state.stop_ai = True
+            st.session_state.ai_thinking = False
+            title = st.session_state.all_chats[curr_id].get("title", "Chat mới")
+            save_chat_to_db(
+                        chat_id, 
+                        st.session_state.username, # Thêm cái này
+                        st.session_state.all_chats[chat_id]["title"], 
+                        data["messages"]
+                    )
+        
+
+        # Hiện lịch sử
+        for idx, m in enumerate(messages):
+            with st.chat_message(m["role"], avatar="🐱" if m["role"] == "user" else "🎓"):
+                st.markdown(m["content"])
+                if m["role"] == "assistant" and "suggestions" in m:
+                    for i, sug in enumerate(m["suggestions"]):
+                        if st.button(f"→ {sug}", key=f"hist_{idx}_{i}"):
+                            st.session_state.pending_input = sug
+                            st.rerun()
+
+        # Khu vực Input hoặc Nút Dừng
+        prompt = None
+        
+        # Xử lý thanh chat / Nút dừng
+        if st.session_state.ai_thinking:
+            # Đưa nút dừng vào 1 div có class fixed-action-container để giữ nó ở đáy
+            st.markdown('<div class="fixed-action-container">', unsafe_allow_html=True)
+            st.button("🛑 Dừng câu trả lời", use_container_width=True, on_click=handle_stop)
+            st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            # Nếu AI không thinking, st.chat_input mặc định sẽ tự bám đáy
+            user_input = st.chat_input("Nhập câu hỏi...")
+            if st.session_state.pending_input:
+                prompt = st.session_state.pending_input
+                st.session_state.pending_input = None
+            elif user_input:
+                prompt = user_input
+
+        # CHẠY AI (Giữ nguyên logic của bạn)
+        if prompt:
+            st.session_state.ai_thinking = True
+            st.session_state.stop_ai = False
+            
+            # Lưu title nếu là câu hỏi đầu tiên (chưa bị đổi tên)
+            if not st.session_state.all_chats[curr_id].get("title") or st.session_state.all_chats[curr_id]["title"] == "Trò chuyện mới":
+                st.session_state.all_chats[curr_id]["title"] = prompt[:25]
+                
+            # Lưu và hiện tin nhắn của user
+            messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user", avatar="🐱"):
+                st.markdown(prompt)
+                scroll_to_bottom()
+                
+            with st.chat_message("assistant", avatar="🎓"):
+                full_prompt = f"{prompt}\n\nSau khi trả lời xong, hãy xuống dòng và viết đúng định dạng sau: [SUG] Câu gợi ý 1 | Câu gợi ý 2 | Câu gợi ý 3."
+                with st.status("EduMind đang suy nghĩ...", expanded=False) as status:
+                    raw_response, _ = call_gemini_retry(
+                        full_prompt, ai_mode, history=messages[:-1]
+                    )
+                    status.update(label="Xong!", state="complete")
+                    
+                if raw_response:
+                    if "[SUG]" in raw_response:
+                        answer_part, sug_part = raw_response.split("[SUG]")
+                        current_sugs = [
+                            s.strip() for s in sug_part.split("|") if s.strip()
+                        ][:3]
+                    else:
+                        answer_part = raw_response
+                        current_sugs = []
+                        
+                    # Tạo sẵn khung message cho assistant để cập nhật liên tục
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": "",
+                        "suggestions": [],
+                    }
+                    messages.append(assistant_msg)
+                    placeholder = st.empty()
+                    displayed_text = ""
+                    
+                    # Tách đoạn text chứa cả khoảng trắng/dòng mới để giữ đúng format markdown
+                    tokens = re.split(r"(\s+)", answer_part.strip())
+                    for token in tokens:
+                        if st.session_state.get("stop_ai", False):
+                            break  # Thoát ngay nếu user bấm dừng
+                        displayed_text += token
+                        # Cập nhật liên tục vào State.
+                        messages[-1]["content"] = displayed_text
+                        # Con trỏ nhấp nháy
+                        placeholder.markdown(displayed_text + " ▌")
+                        # Chỉ sleep ở các từ có nghĩa để tạo hiệu ứng gõ nhanh/mượt hơn
+                        if token.strip():
+                            time.sleep(0.015)
+                            
+                    # Bỏ con trỏ nhấp nháy khi hoàn thành hoặc bị dừng
+                    placeholder.markdown(messages[-1]["content"])
+                    
+                    # Nếu AI chạy xong trọn vẹn thì mới hiển thị Suggestion
+                    if not st.session_state.get("stop_ai", False):
+                        messages[-1]["suggestions"] = current_sugs
+                        
+                    # Lưu vào Database
+                    save_chat_to_db(
+                        chat_id, 
+                        st.session_state.username, # Thêm cái này
+                        st.session_state.all_chats[chat_id]["title"], 
+                        data["messages"]
+                    )
+                    
+                    # Reset trạng thái về bình thường
+                    st.session_state.ai_thinking = False
+                    st.session_state.stop_ai = False
+                    st.rerun()
+
+    # Luôn đặt thẻ này ở cuối cùng để đệm khoảng trống không bị khuất bởi chat_input
+    st.html("<div id='end-of-chat'></div>")
+
+
+
+elif choice == "Tâm Lí & Sức Khoẻ":
+    st.markdown("### 🌿 Trạm Sạc Năng Lượng - EduMind")
+    st.caption("Nơi chia sẻ tâm tư, không lưu trữ lịch sử, hoàn toàn riêng tư.")
+
+    # --- PHẦN 1: GỢI Ý CÂU HỎI (SUGGESTION CARDS) ---
+    st.write("✨ **Cậu đang gặp vấn đề gì thế?**")
+    
+    # Danh sách các câu hỏi gợi ý
+    suggestions = [
+        "Tớ cảm thấy áp lực đồng trang lứa (Peer Pressure)...",
+        "Làm sao để bớt căng thẳng trước kỳ thi sắp tới?",
+        "Tớ vừa bị điểm kém, tớ thấy thất vọng về bản thân.",
+        "Tớ gặp khó khăn trong việc kết bạn ở trường mới.",
+        "Làm thế nào để cân bằng giữa học tập và đam mê?"
+    ]
+
+    # Hiển thị gợi ý dạng nút bấm
+    cols = st.columns(2)
+    selected_sug = None
+    
+    for i, sug in enumerate(suggestions):
+        if cols[i % 2].button(sug, use_container_width=True, key=f"sug_{i}"):
+            selected_sug = sug
+
+    st.divider()
+
+    # 2. Hiển thị Chat tạm thời
+    if "temp_health_chat" not in st.session_state:
+        st.session_state.temp_health_chat = []
+    if "pending_health_input" not in st.session_state:
+        st.session_state.pending_health_input = None
+
+    # Vòng lặp hiển thị tin nhắn
+    for idx, m in enumerate(st.session_state.temp_health_chat):
+        with st.chat_message(m["role"], avatar="🌿" if m["role"] == "assistant" else "👤"):
+            st.markdown(m["content"])
+            # NẾU LÀ AI: Hiển thị các nút gợi ý nếu có
+            if m["role"] == "assistant" and "sugs" in m:
+                cols = st.columns(len(m["sugs"]))
+                for i, sug in enumerate(m["sugs"]):
+                    if cols[i].button(f"✨ {sug}", key=f"health_btn_{idx}_{i}", use_container_width=True):
+                        st.session_state.pending_health_input = sug
                         st.rerun()
 
-        # --- LOGIC XỬ LÝ (Nằm ngoài Form hoặc check biến check_clicked) ---
-        if not st.session_state.get('answered') and check_clicked:
-            if not u_ans:
-                st.warning("Nhập từ đã nhé!")
-            else:
-                st.session_state.answered = True
-                is_ok = (q['a'].lower() in u_ans.lower()) or (u_ans.lower() in q['a'].lower() and len(u_ans) > 0)
-                st.session_state.is_correct = is_ok
+    # Xử lý Input (Thanh chat hoặc Nút gợi ý)
+    h_prompt = st.chat_input("Chia sẻ tâm tư của cậu...")
+    final_input = None
+
+    if st.session_state.pending_health_input:
+        final_input = st.session_state.pending_health_input
+        st.session_state.pending_health_input = None
+    elif h_prompt:
+        final_input = h_prompt
+    elif selected_sug: # Từ các thẻ gợi ý ban đầu
+        final_input = selected_sug
+
+    if final_input:
+        # Lưu tin nhắn user
+        st.session_state.temp_health_chat.append({"role": "user", "content": final_input})
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(final_input)
+
+        with st.chat_message("assistant", avatar="🌿"):
+            with st.spinner("EduMind đang lắng nghe..."):
+                # PROMPT MỚI: Yêu cầu AI sinh gợi ý
+                sys_msg = f"""
+                Bạn là chuyên gia tâm lý thấu cảm. Người dùng nói: '{final_input}'.
+                Hãy trả lời câu hỏi của user, nếu câu hỏi đó chứa nỗi khó khăn user gặp phải, hãy cho họ bản chất + lời khuyên + hành động. 
+                Còn user hỏi riêng thì trả lời riêng
+                SAU ĐÓ, hãy đề xuất đúng 3 gợi ý để người dùng chia sẻ với AI(ví dụ như nay tôi buồn, tôi cần lời khuyên,...), lời khuyên này ngắn gọn (dưới 10 từ).
+                Định dạng cuối câu trả lời: [SUG] Gợi ý 1 | Gợi ý 2 | Gợi ý 3
+                """
+                res, _ = call_gemini_retry(sys_msg, "Tư duy")
                 
-                hz = q['f']['hz']
-                st.session_state.progress["words"][hz] = st.session_state.progress["words"].get(hz, 0) + (1 if is_ok else -1)
-                save_resume_state()
-                st.rerun()
+                if res:
+                    # Tách phần trả lời và phần gợi ý
+                    if "[SUG]" in res:
+                        ans_text, sug_part = res.split("[SUG]")
+                        sug_list = [s.strip() for s in sug_part.split("|")][:3]
+                    else:
+                        ans_text, sug_list = res, []
 
-        # --- 4. CONTAINER ĐÁP ÁN (CHIA 2 PHẦN) ---
-        if st.session_state.get('answered'):
-            if st.session_state.is_correct: 
-                st.success("🎉 Chính xác!")
-            else: 
-                st.error(f"Sai rồi! Đáp án: **{q['a']}**")
-                st.session_state.qs.append(st.session_state.qs[curr_idx])
+                    st.markdown(ans_text)
+                    st.session_state.temp_health_chat.append({
+                        "role": "assistant", 
+                        "content": ans_text,
+                        "sugs": sug_list
+                    })
+                    st.rerun()
+                    
+    # --- PHẦN 3: GÓC THƯ GIÃN (SIDEBAR HOẶC BOTTOM) ---
+    with st.expander("🧘 Một vài kỹ thuật thư giãn nhanh"):
+        st.markdown("""
+        - **Quy tắc 5-4-3-2-1:** Tìm 5 thứ bạn thấy, 4 thứ bạn chạm, 3 thứ bạn nghe, 2 thứ bạn ngửi, 1 thứ bạn nếm.
+        - **Hít thở sâu:** Hít vào 4 giây, giữ 4 giây, thở ra 8 giây.
+        """)
+        
+        
+
+# MODULE: ĐỊNH HƯỚNG TƯƠNG LAI
+elif choice == "Định Hướng Tương Lai":
+    st.markdown("<h2 style='text-align: center;'>🧭 La Bàn Định Hướng</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: gray;'>Khám phá tiềm năng, xây lộ trình và thử nghiệm nghề nghiệp thực tế.</p>", unsafe_allow_html=True)
+    st.divider()
+
+    # Tạo 3 tab chức năng chuẩn quốc tế
+    tab1, tab2, tab3 = st.tabs(["🧩 Khám Phá Ikigai", "🗺️ Lộ Trình Ngược (Reverse Roadmap)", "💼 Giả Lập Nghề Nghiệp (Simulation)"])
+
+    # ==========================================
+    # TAB 1: MA TRẬN IKIGAI (Phân tích điểm chạm)
+    # ==========================================
+    with tab1:
+        st.subheader("1. Khám phá vùng giao thoa nghề nghiệp")
+        st.info("Nhập các từ khóa ngắn gọn. Trí tuệ nhân tạo sẽ tìm ra 'điểm chạm' giữa đam mê của cậu và nhu cầu thị trường.")
+        
+
+
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            passion = st.text_area("🌟 Đam mê & Sở thích:", placeholder="Ví dụ: Thích giải thuật toán C++, phân tích biểu đồ nến, tổ chức giải cầu lông...")
+            strength = st.text_area("💪 Kỹ năng thế mạnh:", placeholder="Ví dụ: Tư duy logic (HLD, DP), code Python/C++, giao tiếp tiếng Trung...")
+        with col2:
+            market = st.text_area("📈 Xu hướng thị trường cậu quan tâm:", placeholder="Ví dụ: AI, Quantitative Trading, Công nghệ giáo dục (EdTech)...")
+            salary = st.text_input("💰 Mức thu nhập kỳ vọng (/tháng):", placeholder="Ví dụ: 30k - 50k (Không cần ghi đơn vị tiền tệ)")
+
+        if st.button("🔍 Phân tích Ma trận Ikigai", type="secondary", use_container_width=True):
+            if passion and strength:
+                with st.spinner("Đang tổng hợp dữ liệu và tìm kiếm cơ hội..."):
+                    sys_msg = f"""
+                    Phân tích Ikigai cho người dùng với dữ liệu: 
+                    Đam mê: {passion}, Điểm mạnh: {strength}, Thị trường: {market}, Kỳ vọng lương: {salary}.
+                    Hãy đề xuất 3 nghề nghiệp cụ thể, ngách thị trường tiềm năng phù hợp nhất. 
+                    Mỗi nghề nghiệp nêu rõ: 
+                    - Tên vị trí (Tiếng Việt & Tiếng Anh).
+                    - Lý do phù hợp với dữ liệu trên.
+                    - Các kỹ năng cần bổ sung ngay lập tức.
+                    Sử dụng định dạng Markdown, rõ ràng, hiện đại. Nếu có nhắc đến tiền, định dạng số với chữ 'k' (VD: 50k, 100k) và tuyệt đối không dùng ký hiệu đô la.
+                    """
+                    res, _ = call_gemini_retry(sys_msg, "Tư duy")
+                    if res:
+                        st.success("Tạo phân tích thành công!")
+                        st.markdown(res)
+            else:
+                st.warning("Cậu điền ít nhất Đam mê và Điểm mạnh để AI phân tích nhé!")
+
+    # ==========================================
+    # TAB 2: LỘ TRÌNH NGƯỢC (REVERSE ENGINEERING)
+    # ==========================================
+    with tab2:
+        st.subheader("2. Thiết kế Lộ Trình Ngược")
+        st.write("Xác định mục tiêu cuối cùng, hệ thống sẽ chẻ nhỏ thành các cột mốc lùi dần về hiện tại.")
+        
+        goal = st.text_input("🎯 Mục tiêu lớn nhất của cậu (1-5 năm tới):", placeholder="Ví dụ: Đạt HSK 6 để nhận học bổng du học Trung Quốc năm 2027, hoặc trở thành Quant Developer.")
+        timeframe = st.slider("Thời gian hoàn thành (Năm):", 1, 10, 3)
+        
+        if st.button("🚀 Xây dựng Timeline", use_container_width=True):
+            if goal:
+                with st.spinner(f"Đang tính toán các cột mốc lùi từ năm {2026 + timeframe} về 2026..."):
+                    sys_msg = f"""
+                    Áp dụng phương pháp Reverse Engineering (Kỹ thuật dịch ngược) để lên lộ trình {timeframe} năm cho mục tiêu: "{goal}".
+                    Bắt đầu từ kết quả cuối cùng ở năm {2026 + timeframe}, lùi dần từng năm về hiện tại (Năm nay là 2026, người dùng học lớp 11).
+                    Với mỗi giai đoạn, chỉ ra: 
+                    - Cột mốc cần đạt (Milestone).
+                    - Hành động cụ thể cần làm (Actionable steps).
+                    - Rủi ro có thể gặp phải và cách phòng tránh.
+                    Trình bày bằng Markdown, sử dụng bullet points rõ ràng.
+                    """
+                    res, _ = call_gemini_retry(sys_msg, "Tư duy")
+                    if res:
+                        st.markdown(res)
+                        
+                        # Thêm nút tải file (Tùy chọn nâng cao)
+                        st.download_button(
+                            label="📥 Tải Lộ Trình (TXT)",
+                            data=res,
+                            file_name="Lo_Trinh_Tuong_Lai.txt",
+                            mime="text/plain"
+                        )
+            else:
+                st.warning("Nhập mục tiêu để bắt đầu nào!")
+
+    # ==========================================
+    # TAB 3: GIẢ LẬP NGHỀ NGHIỆP (SIMULATION)
+    # ==========================================
+    with tab3:
+        st.subheader("3. Trải nghiệm Tình huống Thực tế")
+        st.write("Thử đóng vai vào một vị trí công việc xem cậu có thực sự chịu được áp lực của nó không.")
+        
+        roles = [
+            "Software Engineer (Kỹ sư phần mềm)", 
+            "Quantitative Researcher (Nghiên cứu định lượng)", 
+            "Data Analyst (Chuyên viên phân tích dữ liệu)", 
+            "Project Manager (Quản lý dự án EduTech)"
+        ]
+        selected_role = st.selectbox("Chọn vai trò cậu muốn thử nghiệm:", roles)
+        
+        if "sim_active" not in st.session_state:
+            st.session_state.sim_active = False
             
-            # Nội dung ví dụ bên phải
-            ex_content = f"""
-                <div class="ans-right">
-                    <b style="color: {t['main']}">Ví dụ:</b><br>
-                    <span style="font-size: 1rem;">{q['f']['ex_hz']}</span><br>
-                    <i style="color: gray; font-size: 0.8rem;">{q['f']['ex_py']}</i><br>
-                    <span>{q['f']['ex_vn']}</span>
-                </div>
-            """ if q['f']['ex_hz'] else '<div class="ans-right"><i>(Không có ví dụ)</i></div>'
+        if st.button("🎭 Bắt đầu ngày làm việc", type="secondary"):
+            st.session_state.sim_active = True
+            with st.spinner("Đang khởi tạo tình huống..."):
+                sys_msg = f"""
+                Tạo một tình huống thực tế KHÓ KHĂN mà một {selected_role} thường gặp phải trong công việc hàng ngày.
+                Tình huống cần gay cấn (ví dụ: thị trường sập mạnh, thuật toán chạy quá chậm O(N^2) cần tối ưu, hoặc mâu thuẫn team).
+                Kết thúc bằng câu hỏi: "Với tư cách là {selected_role}, bạn sẽ xử lý tình huống này thế nào?".
+                """
+                res, _ = call_gemini_retry(sys_msg, "TƯ duy")
+                st.session_state.sim_context = res
+                st.session_state.sim_history = [{"role": "assistant", "content": res}]
 
-            # Card hiển thị chi tiết (Không còn nút Tiếp theo ở dưới này nữa)
-            st.markdown(f"""
-                <div class="glass-box answer-card">
-                    <div class="ans-left">
-                        <h2 style="margin:0; color: {t['main']}">{q['f']['hz']}</h2>
-                        <div style="font-size: 1.1rem; font-weight: bold;">{q['f']['py']}</div>
-                        <div style="font-size: 0.9rem; color: gray;">{q['f']['vn'].capitalize()}</div>
-                    </div>
-                    {ex_content}
-                </div>
-            """, unsafe_allow_html=True)
-
-        auto_focus()
-    else:
-        st.balloons()
-        st.success("Hoàn thành bài học!")
-        if st.button("Về Menu chính", use_container_width=True):
-            st.session_state.mode = "manage"
-            st.rerun()
-  
-  
-  
-  
+        # Hiển thị khu vực tương tác nếu Simulation đang chạy
+        if st.session_state.get("sim_active", False):
+            st.divider()
+            for m in st.session_state.sim_history:
+                with st.chat_message(m["role"], avatar="💼" if m["role"] == "assistant" else "👤"):
+                    st.markdown(m["content"])
             
+            sim_ans = st.chat_input("Nhập cách giải quyết của cậu...")
+            if sim_ans:
+                st.session_state.sim_history.append({"role": "user", "content": sim_ans})
+                with st.chat_message("user", avatar="👤"):
+                    st.markdown(sim_ans)
+                
+                with st.chat_message("assistant", avatar="💼"):
+                    with st.spinner("Sếp đang đánh giá cách xử lý của cậu..."):
+                        eval_msg = f"""
+                        Tình huống: {st.session_state.sim_context}
+                        Cách giải quyết của ứng viên: {sim_ans}
+                        Hãy đánh giá cách xử lý này như một người quản lý cấp cao.
+                        Chỉ ra điểm tốt, điểm rủi ro và gợi ý cách xử lý tối ưu hơn ở môi trường doanh nghiệp.
+                        """
+                        res, _ = call_gemini_retry(eval_msg, "Tư duy")
+                        st.markdown(res)
+                        st.session_state.sim_history.append({"role": "assistant", "content": res})
+                
+                if st.button("⏹️ Kết thúc phiên mô phỏng"):
+                    st.session_state.sim_active = False
+                    st.session_state.sim_history = []
+                    st.rerun()
+                    
+                    
+
+
+
+# Đặt dòng này ở cuối file app.py của bạn
+st.markdown("<div id='end-of-chat'></div>", unsafe_allow_html=True)
