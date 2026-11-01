@@ -17,7 +17,15 @@ Chế độ Nhanh mặc định dùng `gemini-3.1-flash-lite`, còn Tư duy dùn
 
 Ứng dụng kiểm tra kết nối Gemini khi phiên bắt đầu và hiển thị trạng thái trong sidebar. Lỗi mạng, timeout, xác thực, quota, model không tồn tại và lỗi nhà cung cấp có thông báo riêng. Lỗi tạm thời được thử tối đa ba lần qua model chính/dự phòng; câu hỏi chưa có phản hồi vẫn được giữ để người dùng thử lại mà không tạo bản sao.
 
+Giải bài bằng ảnh yêu cầu đăng nhập và mặc định có 3 lượt/tài khoản/ngày (theo ngày Việt Nam). Có thể đặt `EDUMIND_IMAGE_DAILY_LIMIT` trong `.env` hoặc Streamlit secrets, giá trị từ 1 đến 100. Hạn mức được kiểm tra và giữ chỗ nguyên tử trong SQLite trước khi gọi Gemini; khi hết lượt, giao diện ẩn chức năng chọn ảnh. Một lần gửi ảnh được tính lượt kể cả khi dịch vụ AI lỗi. Ảnh JPG/JPEG/PNG tối đa 10 MB và 20 megapixel; ảnh được xử lý trong bộ nhớ và không lưu vào lịch sử. Chỉ gửi một request Gemini cho mỗi lần đặt chỗ, không tự retry hoặc tự đổi model cho ảnh. Hạn mức này kiểm soát mức dùng của ứng dụng, không đọc quota còn lại phía Gemini; lỗi 429 của provider vẫn có thể xảy ra. Camera trên thiết bị cần trình duyệt hỗ trợ quyền camera và kết nối HTTPS.
+
 Chọn giao diện trong menu **⋮ → Settings → Theme**. Cả bảng màu Sáng và Tối được cấu hình trong `.streamlit/config.toml`; sidebar tự thu gọn theo màn hình nhỏ.
+
+Không gian **Công cụ học tập** mở bảng biến thiên/đồ thị và GeoGebra trong khung khi website cho phép, đồng thời luôn có liên kết mở tab mới. Symbolab và PhET được mở bên ngoài do chính sách iframe của các website này không cho nhúng vào EduMind.
+
+Prompt học tập hướng dẫn AI bám Chương trình Giáo dục phổ thông 2018 và không đoán các cập nhật/chính sách năm học 2026–2027. EduMind hiện không truy xuất trực tiếp văn bản pháp luật mới trong lúc trả lời; khi hỏi quy định mới, AI được hướng dẫn nói rõ chưa thể xác minh trực tuyến và chỉ nguồn Bộ GD&ĐT (`moet.gov.vn`) cùng Cơ sở dữ liệu quốc gia về văn bản pháp luật (`vbpl.vn`). Đây là giới hạn có chủ ý, không phải bảo đảm rằng kiến thức của mô hình đã cập nhật mọi thay đổi.
+
+Nguồn Bộ GD&ĐT để người dùng đối chiếu: [Danh mục văn bản quy phạm pháp luật](https://moet.gov.vn/van-ban/van-ban-quy-pham-phap-luat) và [chuyên mục Chương trình giáo dục phổ thông](https://moet.gov.vn/tin-tuc-cot-phai/chuong-trinh-giao-duc-pho-thong). Danh mục thay đổi theo thời gian; ứng dụng không tự tải hay diễn giải văn bản mới.
 
 ## Tài khoản và lịch sử
 
@@ -40,17 +48,20 @@ Trước khi khôi phục bản sao, dừng Streamlit, giữ thêm một bản c
 - `edumind/auth.py`, `storage.py`: xác thực, chuyển tài khoản cũ, migration và truy vấn theo chủ sở hữu.
 - `edumind/models.py`: kiểu hội thoại, chức năng, chế độ và ngữ cảnh yêu cầu AI.
 - `edumind/catalog.py`: danh mục gợi ý có thể chỉnh sửa; không phải mục lục đầy đủ mọi bộ sách.
-- `edumind/ai.py`: quyền dùng Tư duy, prompt theo chức năng, hội thoại nhiều lượt và xử lý lỗi Gemini.
-- `edumind/ui.py`: dashboard, biểu mẫu, lịch sử, bộ lọc và ba luồng tương tác.
+- `edumind/ai.py`: quyền dùng Tư duy, prompt theo chức năng, nội dung đa phương thức, hội thoại nhiều lượt và xử lý lỗi Gemini.
+- `edumind/storage.py`: migration SQLite, lịch sử theo chủ sở hữu và bộ đếm quota ảnh theo ngày.
+- `edumind/ui.py`: dashboard, biểu mẫu, lịch sử, công cụ học tập, camera/thư viện ảnh và các luồng tương tác.
 
 ## Kiểm thử
+
+Hướng dẫn chi tiết từ cấu trúc code và chạy trên Windows đến GitHub, cấu hình secrets và triển khai Streamlit có trong [QUY_TRINH_PHAT_TRIEN_EDUMIND.docx](QUY_TRINH_PHAT_TRIEN_EDUMIND.docx).
 
 ```powershell
 python -m pip install -r requirements-dev.txt
 python -m pytest -q --basetemp=.test-baseline
 ```
 
-Tests dùng database tạm và Gemini giả lập, không dùng khóa thật hoặc gửi nội dung tới nhà cung cấp. Bao gồm migration/sao lưu, Argon2 và tài khoản cũ, phân quyền hai tài khoản, lịch sử, retry không trùng, giữ bản nháp, danh mục lớp/môn, ba bước hướng nghiệp và đồng ý lưu tâm lí.
+Tests dùng database tạm và Gemini giả lập, không dùng khóa thật hoặc gửi nội dung tới nhà cung cấp. Bao gồm migration/sao lưu, quota ảnh theo tài khoản/ngày và giao dịch đồng thời, xử lý ảnh, kiểm soát request đa phương thức, Argon2 và tài khoản cũ, phân quyền hai tài khoản, lịch sử, retry không trùng, giữ bản nháp, danh mục lớp/môn, ba bước hướng nghiệp và đồng ý lưu tâm lí.
 
 Kiểm tra giao diện khi phát hành: desktop và màn hình rộng 390px, cả Sáng/Tối; xem dashboard, form tài khoản, danh mục nhập thủ công, hội thoại dài/công thức, menu lịch sử và thông báo lỗi. Kiểm tra không tràn ngang, chữ/nút đọc rõ và ô nhập luôn tiếp cận được. Cần thêm một lượt thử Gemini thật với cấu hình triển khai để xác nhận quyền model/quota; kiểm thử tự động không thay thế bước này.
 
