@@ -77,3 +77,5 @@ class AIRequest:
     text: str
     history: list[dict]
     context: dict
+    image_bytes: bytes | None = None
+    image_mime_type: str | None = None

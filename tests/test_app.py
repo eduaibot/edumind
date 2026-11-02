@@ -1,12 +1,16 @@
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 from streamlit.testing.v1 import AppTest
 
 from edumind.ai import AIErrorKind, AIHealth, AIService, AIUnavailable
 from edumind.auth import Auth
 from edumind.catalog import MANUAL, TASKS
-from edumind.models import Feature
+from edumind.models import Feature, LOCAL_TZ
 from edumind.storage import Store
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +93,43 @@ def test_dashboard_navigation_and_no_api_key(app_env, monkeypatch):
     button(at, "Đăng nhập / Đăng ký").click().run()
     assert at.text_input(key="login_email")
     assert not calls
+
+
+def test_learning_tools_navigation_works(app_env):
+    at, _, _ = app_env
+    at.radio(key="nav").set_value("tools").run()
+    assert not at.exception
+    assert at.selectbox(key="educational_tool").value == "Bảng biến thiên & đồ thị"
+
+
+def test_exhausted_image_quota_blocks_photo_controls_before_upload(app_env):
+    at, store, calls = app_env
+    user = login_as_test_user(at, store)
+    quota_day = datetime.now(LOCAL_TZ).date().isoformat()
+    for _ in range(3):
+        store.reserve_image_quota(user.id, quota_day, 3)
+
+    at.radio(key="nav").set_value("study").run()
+
+    assert not at.exception and calls == []
+    assert any("hết hạn mức hôm nay" in item.value for item in at.warning)
+    assert not at.get("file_uploader") and not at.get("camera_input")
+
+
+def test_image_validation_normalizes_jpeg_png_and_rejects_oversize():
+    from edumind.ui import IMAGE_MAX_BYTES, normalize_image_upload
+
+    for image_format, expected_mime in [("JPEG", "image/jpeg"), ("PNG", "image/png")]:
+        data = BytesIO()
+        Image.new("RGB", (8, 8), "white").save(data, format=image_format)
+        normalized, mime_type = normalize_image_upload(SimpleNamespace(getvalue=lambda: data.getvalue()))
+        assert mime_type == expected_mime
+        assert Image.open(BytesIO(normalized)).format == image_format
+
+    oversized_data = b"x" * (IMAGE_MAX_BYTES + 1)
+    oversized = SimpleNamespace(getvalue=lambda: oversized_data)
+    with pytest.raises(ValueError, match="10 MB"):
+        normalize_image_upload(oversized)
 
 
 @pytest.mark.parametrize("feature", list(Feature))
@@ -432,3 +473,34 @@ def test_failed_question_retry_after_reloading_saved_history(app_env, monkeypatc
     assert not at.exception
     assert requests[0].context["grade"] == 9
     assert len(store.get_chat(user.id, chat_id).messages) == 2
+
+
+def test_mobile_orientation_banner_dismiss(app_env):
+    at, _, _ = app_env
+    assert button(at, "Từ chối")
+    assert button(at, "Đồng ý")
+    button(at, "Từ chối").click().run()
+    at.run()
+    assert at.session_state["mobile_rotate_dismissed"] is True
+    assert all(b.label != "Từ chối" for b in at.button)
+    assert all(b.label != "Đồng ý" for b in at.button)
+
+
+def test_mobile_orientation_banner_accept(app_env):
+    at, _, _ = app_env
+    assert button(at, "Đồng ý")
+    button(at, "Đồng ý").click().run()
+    at.run()
+    assert at.session_state["mobile_rotate_dismissed"] is True
+    assert all(b.label != "Đồng ý" for b in at.button)
+
+
+def test_css_scroll_and_layout_improvements():
+    from edumind.ui import CSS
+    assert "overflow-y:auto" in CSS
+    assert "padding:1rem 1.5rem 2.2rem" in CSS
+    assert "st-key-mobile-orient-notice" in CSS
+    assert "orientation: portrait" in CSS
+    assert "overflow:visible" in CSS
+    assert "contextual-card" in CSS
+    assert "contextual-pet-wrap" in CSS

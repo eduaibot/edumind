@@ -1,4 +1,6 @@
 import html
+import hashlib
+from io import BytesIO
 import os
 import time
 from datetime import datetime
@@ -6,19 +8,46 @@ from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
+from PIL import Image, UnidentifiedImageError
 
 from .ai import AIHealth, AIService, AIUnavailable, LoginRequired
 from .auth import Auth
 from .catalog import MANUAL, TASKS, subjects, topics
 from .models import AIMode, AIRequest, Conversation, Feature, FEATURE_LABELS, LOCAL_TZ, MODE_LABELS, history_group, now_iso
-from .storage import Store
+from .storage import ImageQuotaExceeded, Store
 
 ROOT = Path(__file__).resolve().parent.parent
+TOOLS_NAV = "tools"
+IMAGE_MAX_BYTES = 10 * 1024 * 1024
+IMAGE_MAX_PIXELS = 20_000_000
+DEFAULT_IMAGE_DAILY_LIMIT = 3
 ICONS = {Feature.STUDY: ":material/school:", Feature.WELLBEING: ":material/spa:", Feature.CAREER: ":material/explore:"}
 DESCRIPTIONS = {
     Feature.STUDY: "Hiểu cách làm, luyện đúng trọng tâm và chuẩn bị cho mục tiêu tiếp theo.",
     Feature.WELLBEING: "Một khoảng dừng để nhìn lại cảm xúc và tìm một bước nhỏ phù hợp với bạn.",
     Feature.CAREER: "Hiểu bản thân hơn, khám phá lựa chọn và thử những bước đi thực tế.",
+}
+EDUCATIONAL_TOOLS = {
+    "Bảng biến thiên & đồ thị": {
+        "url": "https://congcutoanhoc.com/congcu/ve_bbt_dothi.html",
+        "description": "Vẽ bảng biến thiên và đồ thị hàm số.",
+        "embed": True,
+    },
+    "GeoGebra Classic": {
+        "url": "https://www.geogebra.org/classic",
+        "description": "Khám phá hình học, đại số và đồ thị tương tác.",
+        "embed": True,
+    },
+    "Symbolab": {
+        "url": "https://vi.symbolab.com/",
+        "description": "Tra cứu công cụ giải toán và lời giải từng bước.",
+        "embed": False,
+    },
+    "PhET": {
+        "url": "https://phet.colorado.edu/vi/",
+        "description": "Học khoa học qua các mô phỏng tương tác miễn phí.",
+        "embed": False,
+    },
 }
 
 CSS = """
@@ -27,18 +56,18 @@ CSS = """
  --em-violet:#6d5dfc; --em-blue:#3b82f6; --em-cyan:#22c7c9;
  --em-orange:#ff9f43; --em-pink:#ff6b9a; --em-ink:#17213a;
 }
-html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] { height:100%; overflow:hidden; }
-[data-testid="stAppViewContainer"] > .main { height:100vh; overflow:hidden; }
-.block-container { max-width:1240px; height:100vh; padding:1.05rem 1.5rem .9rem; overflow:hidden; }
-.block-container > [data-testid="stVerticalBlock"] { height:100%; min-height:0; display:flex; flex-direction:column; gap:.65rem; }
+html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] { min-height:100%; height:auto; }
+[data-testid="stAppViewContainer"] > .main { min-height:100vh; height:auto; overflow-y:auto; overflow-x:hidden; }
+.block-container { max-width:1280px; min-height:100vh; height:auto; padding:1rem 1.5rem 2.2rem; display:flex; flex-direction:column; overflow:visible; }
+.block-container > [data-testid="stVerticalBlock"] { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; gap:.75rem; }
 h1 { font-size:clamp(1.55rem, 2.4vw, 2.2rem) !important; font-weight:800 !important; letter-spacing:-.045em; line-height:1.08 !important; }
 h2 { font-size:1.32rem !important; letter-spacing:-.025em; }
 h3 { font-size:1.05rem !important; letter-spacing:-.015em; }
 p, li { line-height:1.5; }
 [data-testid="stHeader"] { background:transparent; }
 [data-testid="stSidebar"] { border-right:1px solid color-mix(in srgb, currentColor 9%, transparent); }
-[data-testid="stSidebar"] .block-container { height:100vh; padding:1rem .9rem .8rem; overflow:hidden; }
-[data-testid="stSidebar"] .block-container > [data-testid="stVerticalBlock"] { height:100%; display:flex; flex-direction:column; gap:.5rem; }
+[data-testid="stSidebar"] .block-container { min-height:100vh; padding:1rem .9rem 2rem; overflow-y:auto; }
+[data-testid="stSidebar"] .block-container > [data-testid="stVerticalBlock"] { min-height:100%; display:flex; flex-direction:column; gap:.5rem; }
 [data-testid="stSidebar"] [data-testid="stRadio"] > div { gap:.2rem; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label { padding:.45rem .65rem; border-radius:12px; transition:.2s ease; }
 [data-testid="stSidebar"] [data-testid="stRadio"] label:hover { background:color-mix(in srgb, var(--em-violet) 8%, transparent); transform:translateX(2px); }
@@ -55,7 +84,9 @@ p, li { line-height:1.5; }
 .tag { display:inline-flex; align-items:center; font-size:.72rem; font-weight:650; border:1px solid color-mix(in srgb, var(--em-violet) 21%, transparent); background:color-mix(in srgb, var(--em-violet) 7%, transparent); border-radius:999px; padding:4px 10px; margin:0 .3rem .3rem 0; }
 .step-label { font-size:.68rem; letter-spacing:.1em; font-weight:800; opacity:.58; margin-bottom:.45rem; }
 .muted { opacity:.65; font-size:.84rem; }
-.page-heading { display:flex; justify-content:space-between; align-items:center; min-height:64px; padding:.15rem .2rem; }
+.page-heading { display:flex; justify-content:space-between; align-items:center; gap:1.25rem; min-height:64px; padding:.15rem .2rem; }
+.page-heading > div:first-child { flex:1 1 auto; min-width:0; }
+.page-heading .mascot-wrap { flex:0 0 auto; }
 .page-heading h1 { margin:0; }
 .page-heading .lead { margin:.2rem 0 0; }
 .hero { position:relative; overflow:hidden; min-height:128px; padding:1.2rem 1.45rem; border-radius:22px; color:white; background:linear-gradient(120deg,#5848e8 0%,#6d5dfc 42%,#2d9de7 100%); box-shadow:0 16px 38px rgba(72,79,190,.20); }
@@ -67,7 +98,7 @@ p, li { line-height:1.5; }
 .hero h1 { margin:.12rem 0 .35rem; max-width:650px; }
 .hero p { margin:0; max-width:calc(100% - 125px); opacity:.88; }
 .today-pill { display:inline-flex; padding:.3rem .65rem; border-radius:999px; background:rgba(255,255,255,.16); font-size:.7rem; font-weight:750; letter-spacing:.04em; }
-.feature-card { min-height:190px; height:100%; border-radius:20px; padding:1rem 1.05rem; border:1px solid color-mix(in srgb, currentColor 9%, transparent); background:color-mix(in srgb, var(--card-color) 7%, transparent); box-shadow:0 8px 24px rgba(35,42,75,.07); transition:transform .2s ease, box-shadow .2s ease; }
+.feature-card { min-height:190px; height:100%; border-radius:20px; padding:1rem 1.05rem; border:1px solid color-mix(in srgb, currentColor 9%, transparent); background:color-mix(in srgb, var(--card-color) 7%, transparent); box-shadow:0 8px 24px rgba(35,42,75,.07); transition:transform .2s ease, box-shadow .2s ease; display:flex; flex-direction:column; justify-content:space-between; }
 .feature-card:hover { transform:translateY(-3px); box-shadow:0 14px 30px rgba(35,42,75,.12); }
 .feature-icon { width:42px; height:42px; display:grid; place-items:center; border-radius:13px; color:white; background:var(--card-color); box-shadow:0 8px 18px color-mix(in srgb, var(--card-color) 28%, transparent); font-size:1.25rem; margin-bottom:.65rem; }
 .feature-card h3 { margin:0 0 .32rem; }
@@ -92,27 +123,41 @@ p, li { line-height:1.5; }
 [data-testid="stPopover"] button { min-height:2.3rem; border-radius:12px; }
 [data-testid="stSidebar"] [data-testid="stPopover"] button { min-width:0; width:100%; padding:.15rem; }
 [data-testid="stTextArea"] textarea, [data-testid="stTextInput"] input { border-radius:12px; }
+[data-testid="stExpander"] { border-radius:16px; border-color:color-mix(in srgb, currentColor 12%, transparent); }
 .st-key-overview-cards { flex:1 1 auto; min-height:0; }
 .st-key-sr-title { position:absolute !important; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .st-key-overview-cards > div, .st-key-overview-cards [data-testid="stHorizontalBlock"] { height:100%; }
-.st-key-overview-footer { flex:0 0 auto; }
+.st-key-overview-footer { flex:0 0 auto; margin-top:.45rem; }
 .st-key-feature-toolbar { flex:0 0 auto; padding:.55rem .7rem; border-radius:16px; border:1px solid color-mix(in srgb,currentColor 9%,transparent); background:color-mix(in srgb,var(--em-violet) 4%,transparent); }
-.st-key-conversation { flex:1 1 0; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:.15rem .45rem .4rem .1rem; scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--primary-color,var(--em-violet)) 45%,transparent) transparent; }
+.st-key-conversation { flex:1 1 auto; min-height:140px; max-height:calc(100vh - 290px); overflow-y:auto; overscroll-behavior:contain; scroll-behavior:smooth; scroll-padding-block:1rem; padding:.25rem .5rem .5rem .25rem; scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--primary-color,var(--em-violet)) 45%,transparent) transparent; }
 .st-key-conversation > div, .st-key-conversation [data-testid="stVerticalBlock"] { min-height:0; }
+.st-key-conversation [data-testid="stChatMessageContent"] { min-width:0; overflow-wrap:anywhere; }
+.st-key-conversation [data-testid="stMarkdownContainer"] p { line-height:1.75; margin:0 0 .85rem; }
+.st-key-conversation [data-testid="stMarkdownContainer"] li { line-height:1.7; margin:.2rem 0; }
+.st-key-conversation [data-testid="stMarkdownContainer"] pre { max-width:100%; overflow-x:auto; }
+.st-key-conversation [data-testid="stMarkdownContainer"] table { display:block; max-width:100%; overflow-x:auto; }
+.st-key-conversation [data-testid="stMarkdownContainer"] img { max-width:100%; height:auto; }
+.tool-embed { width:100%; min-height:460px; border:1px solid color-mix(in srgb,currentColor 14%,transparent); border-radius:16px; overflow:hidden; }
+.image-preview img { max-height:360px; object-fit:contain; }
 .st-key-conversation-empty { flex:0 0 auto; }
-.st-key-composer { flex:0 0 auto; min-height:0; padding:.62rem .75rem .55rem; border:1px solid color-mix(in srgb,currentColor 18%,transparent) !important; border-radius:17px !important; background:color-mix(in srgb,currentColor 5%,transparent); color:inherit; box-shadow:0 -8px 28px color-mix(in srgb,currentColor 8%,transparent); }
+.st-key-study-empty [data-testid="stVerticalBlockBorderWrapper"] { padding:.8rem 1.1rem; border-radius:16px; background:color-mix(in srgb, var(--em-violet) 4%, transparent); }
+.st-key-composer { flex:0 0 auto; min-height:0; padding:.65rem .85rem .55rem; border:1px solid color-mix(in srgb,currentColor 18%,transparent) !important; border-radius:17px !important; background:color-mix(in srgb,currentColor 5%,transparent); color:inherit; box-shadow:0 -4px 20px color-mix(in srgb,currentColor 6%,transparent); margin-top:.25rem; margin-bottom:.55rem; }
 .st-key-composer [data-testid="stTextArea"] textarea { min-height:44px !important; height:clamp(44px,8vh,88px) !important; max-height:88px !important; overflow-y:auto !important; padding-top:.65rem; resize:none; border:0; color:inherit; background:color-mix(in srgb,currentColor 4%,transparent); }
 .st-key-composer [data-testid="stButton"] button { border-radius:999px; min-height:2.4rem; }
-.st-key-wellbeing-wizard { position:relative; flex:0 0 auto; min-height:185px; border:1px solid color-mix(in srgb,var(--em-pink) 20%,transparent); background:linear-gradient(120deg,color-mix(in srgb,var(--em-pink) 7%,transparent),color-mix(in srgb,var(--em-violet) 6%,transparent)); border-radius:18px; padding:.85rem 1rem .85rem 175px; overflow:hidden; }
+.st-key-wellbeing-wizard { position:relative; flex:0 0 auto; min-height:195px; border:1px solid color-mix(in srgb,var(--em-pink) 20%,transparent); background:linear-gradient(120deg,color-mix(in srgb,var(--em-pink) 7%,transparent),color-mix(in srgb,var(--em-violet) 6%,transparent)); border-radius:20px; padding:1.15rem 1.4rem 1.15rem 200px; overflow:hidden; }
 .st-key-wizard-state-keeper { display:none !important; }
-.context-pet { width:150px; text-align:center; color:var(--text-color,inherit); }
-.context-pet svg { width:138px; height:138px; overflow:visible; filter:drop-shadow(0 13px 18px color-mix(in srgb,var(--text-color,#17213a) 17%,transparent)); animation:pet-float 3.2s ease-in-out infinite; }
+.context-pet { width:145px; text-align:center; color:var(--text-color,inherit); }
+.context-pet svg { width:132px; height:132px; overflow:visible; filter:drop-shadow(0 10px 16px color-mix(in srgb,var(--text-color,#17213a) 15%,transparent)); animation:pet-float 3.2s ease-in-out infinite; }
 .context-pet .pet-eye { transform-origin:center; animation:pet-blink 4.6s infinite; }
 .context-pet .pet-accessory { transform-origin:center; animation:pet-wave 2.7s ease-in-out infinite; }
-.context-pet-label { margin-top:-.2rem; font-size:.72rem; font-weight:800; opacity:.7; }
-.st-key-wellbeing-wizard .context-pet { position:absolute; left:12px; top:12px; }
-.st-key-contextual-empty { position:relative; min-height:155px; padding:.8rem 1rem .8rem 175px; border:1px solid color-mix(in srgb,currentColor 14%,transparent); border-radius:18px; background:linear-gradient(120deg,color-mix(in srgb,var(--em-violet) 8%,transparent),color-mix(in srgb,currentColor 4%,transparent)); overflow:hidden; }
-.st-key-contextual-empty .context-pet { position:absolute; left:12px; top:5px; }
+.context-pet-label { margin-top:.25rem; font-size:.74rem; font-weight:800; opacity:.75; line-height:1.25; }
+.st-key-wellbeing-wizard .context-pet { position:absolute; left:20px; top:20px; width:145px; margin:0; }
+.contextual-card { display:flex; align-items:center; gap:1.75rem; padding:1.2rem 1.6rem; border-radius:20px; border:1px solid color-mix(in srgb,currentColor 14%,transparent); background:linear-gradient(120deg,color-mix(in srgb,var(--em-violet) 8%,transparent),color-mix(in srgb,currentColor 4%,transparent)); box-shadow:0 4px 18px color-mix(in srgb,currentColor 4%,transparent); margin-bottom:.45rem; }
+.contextual-pet-wrap { flex:0 0 145px; display:flex; justify-content:center; align-items:center; }
+.contextual-pet-wrap .context-pet { position:relative !important; left:auto !important; top:auto !important; width:145px; }
+.contextual-text-wrap { flex:1 1 auto; min-width:0; }
+.contextual-title { font-size:1.12rem; font-weight:800; letter-spacing:-.02em; margin-bottom:.35rem; color:inherit; line-height:1.35; }
+.contextual-desc { font-size:.88rem; opacity:.78; margin:0; line-height:1.5; }
 .thinking-bubble { display:flex; align-items:center; gap:.7rem; padding:.72rem .9rem; border-radius:15px; border:1px solid color-mix(in srgb,currentColor 14%,transparent); background:color-mix(in srgb,currentColor 5%,transparent); }
 .thinking-mini { width:38px; height:38px; animation:pet-float 2s ease-in-out infinite; }
 .thinking-dots { display:inline-flex; gap:.24rem; margin-left:.25rem; }
@@ -124,40 +169,73 @@ p, li { line-height:1.5; }
 .wizard-progress span.done { background:linear-gradient(90deg,var(--em-pink),var(--em-violet)); }
 .wizard-question { font-size:1.05rem; font-weight:800; margin:.2rem 0 .15rem; }
 .wizard-copy { opacity:.66; font-size:.8rem; margin-bottom:.45rem; }
+.st-key-mobile-orient-notice { display:none !important; }
 @media(max-width: 850px) {
- .block-container { padding:.8rem .8rem .65rem; }
+ .block-container { padding:.85rem 1rem 2.2rem; }
  .hero { min-height:112px; padding:1rem; }
  .hero p { font-size:.82rem; max-width:76%; }
  .feature-card { min-height:174px; padding:.8rem; }
  .feature-card p { font-size:.78rem; }
  .mascot { width:74px; height:74px; }
+ .st-key-wellbeing-wizard { padding-left:165px; }
+ .st-key-wellbeing-wizard .context-pet { left:14px; top:16px; width:120px; }
+ .st-key-wellbeing-wizard .context-pet svg { width:110px; height:110px; }
+}
+@media(max-width: 768px) and (orientation: portrait) {
+ .st-key-mobile-orient-notice {
+  display:block !important;
+  margin:.25rem 0 .75rem;
+  padding:.8rem .95rem .7rem;
+  border-radius:16px;
+  border:1px solid color-mix(in srgb, var(--em-violet) 28%, transparent);
+  background:linear-gradient(130deg, color-mix(in srgb, var(--em-violet) 10%, transparent), color-mix(in srgb, var(--em-blue) 8%, transparent));
+  box-shadow:0 4px 18px rgba(109, 93, 252, 0.10);
+ }
+ .orient-badge { display:inline-flex; align-items:center; gap:4px; font-size:.72rem; font-weight:800; text-transform:uppercase; letter-spacing:.08em; color:var(--em-violet); margin-bottom:.2rem; }
+ .orient-text-body strong { font-size:.92rem; font-weight:750; display:block; line-height:1.3; margin-bottom:.2rem; }
+ .orient-text-body p { font-size:.8rem; opacity:.78; margin:0 0 .55rem; line-height:1.4; }
+ .st-key-mobile-orient-notice [data-testid="stHorizontalBlock"] { gap:.5rem; }
+ .st-key-mobile-orient-notice [data-testid="stButton"] button { min-height:2.15rem; font-size:.82rem; padding:.2rem .4rem; }
 }
 @media(max-width: 700px) {
- .block-container { padding:.65rem .55rem .5rem; }
+ .block-container { padding:.75rem .75rem 2rem; }
  .page-heading { min-height:50px; }
  .page-heading .lead { display:none; }
  .hero { min-height:105px; }
  .hero p { display:none; }
- .st-key-overview-cards [data-testid="stHorizontalBlock"] { flex-wrap:nowrap; gap:.4rem; }
- .feature-card { min-height:150px; }
+ .st-key-overview-cards { overflow-y:auto; }
+ .st-key-overview-cards [data-testid="stHorizontalBlock"] { flex-direction:column !important; height:auto; gap:.55rem; }
+ .st-key-overview-cards [data-testid="stColumn"] { flex:1 1 auto !important; width:100% !important; min-width:0 !important; }
+ .feature-card { min-height:112px; }
  .feature-card p { display:none; }
+ .st-key-composer { margin-bottom:.85rem; }
  .st-key-composer [data-testid="stHorizontalBlock"] { flex-wrap:nowrap !important; align-items:center; gap:.35rem; }
  .st-key-composer [data-testid="stColumn"]:first-child { flex:1 1 auto !important; width:auto !important; min-width:0 !important; }
  .st-key-composer [data-testid="stColumn"]:last-child { flex:0 0 58px !important; width:58px !important; min-width:58px !important; }
  .st-key-composer [data-testid="stCaptionContainer"] { display:none; }
- .st-key-wellbeing-wizard,.st-key-contextual-empty { padding-left:.75rem; min-height:0; }
- .st-key-wellbeing-wizard .context-pet,.st-key-contextual-empty .context-pet { position:relative; left:auto; top:auto; float:left; width:78px; margin:-.25rem .55rem .15rem -.2rem; }
- .context-pet svg { width:72px; height:72px; }
- .context-pet-label { display:none; }
+ .st-key-feature-toolbar [data-testid="stHorizontalBlock"] { flex-wrap:wrap; gap:.25rem; }
+ .st-key-conversation { min-height:120px; max-height:48vh; }
+ .tool-embed { min-height:360px; }
+ .st-key-wellbeing-wizard { padding:.9rem 1rem .9rem 96px !important; min-height:0; }
+ .st-key-wellbeing-wizard .context-pet { position:absolute !important; left:10px !important; top:14px !important; width:72px !important; float:none !important; margin:0 !important; }
+ .st-key-wellbeing-wizard .context-pet svg { width:68px !important; height:68px !important; }
+ .st-key-wellbeing-wizard .context-pet-label { display:none !important; }
+ .contextual-card { gap:1.1rem; padding:.9rem 1.1rem; align-items:center; }
+ .contextual-pet-wrap { flex:0 0 76px; }
+ .contextual-pet-wrap .context-pet { width:76px; }
+ .contextual-pet-wrap .context-pet svg { width:70px; height:70px; }
+ .contextual-pet-wrap .context-pet-label { display:none; }
+ .contextual-title { font-size:.96rem; margin-bottom:.2rem; }
+ .contextual-desc { font-size:.82rem; }
  [data-testid="stDialog"] [role="dialog"] { max-width:calc(100vw - 1rem); }
 }
 @media(max-height:700px) {
- .block-container { padding-top:.55rem; padding-bottom:.45rem; gap:.35rem; }
+ .block-container { padding-top:.6rem; padding-bottom:1.8rem; gap:.4rem; }
  .page-heading { min-height:44px; }
  .page-heading .lead { display:none; }
  .page-heading .mascot-wrap { display:none; }
  .st-key-feature-toolbar { padding:.35rem .5rem; }
- .st-key-composer { padding:.4rem .55rem .32rem; }
+ .st-key-composer { padding:.4rem .55rem .32rem; margin-bottom:.6rem; }
  .st-key-composer [data-testid="stTextArea"] textarea { height:44px !important; max-height:66px !important; }
 }
 @media(prefers-reduced-motion: reduce) { .mascot,.mascot .pet-eye,.mascot .pet-wing-left,.mascot-wrap:after,.context-pet svg,.context-pet .pet-eye,.context-pet .pet-accessory,.thinking-mini,.thinking-dots i { animation:none !important; } }
@@ -249,12 +327,50 @@ def initialize():
         "pending_request": None,
         "ai_health": None,
         "ai_health_at": 0.0,
+        "image_picker_revisions": {},
+        "image_previews": {},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
     if "_next_nav" in st.session_state:
         st.session_state.nav = st.session_state.pop("_next_nav")
+
+
+def image_daily_limit():
+    raw_limit = setting("EDUMIND_IMAGE_DAILY_LIMIT", str(DEFAULT_IMAGE_DAILY_LIMIT))
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("EDUMIND_IMAGE_DAILY_LIMIT phải là số nguyên dương.") from exc
+    if limit < 1 or limit > 100:
+        raise ValueError("EDUMIND_IMAGE_DAILY_LIMIT cần nằm trong khoảng 1–100.")
+    return limit
+
+
+def normalize_image_upload(upload):
+    data = upload.getvalue()
+    if not data:
+        raise ValueError("Ảnh trống hoặc không đọc được.")
+    if len(data) > IMAGE_MAX_BYTES:
+        raise ValueError("Ảnh vượt quá giới hạn 10 MB. Hãy chọn ảnh nhỏ hơn.")
+    try:
+        with Image.open(BytesIO(data)) as image:
+            image_format = image.format
+            if image_format not in {"JPEG", "PNG"}:
+                raise ValueError("Chỉ hỗ trợ ảnh JPG, JPEG hoặc PNG.")
+            if image.width * image.height > IMAGE_MAX_PIXELS:
+                raise ValueError("Ảnh có độ phân giải quá lớn. Hãy giảm kích thước rồi thử lại.")
+            image.load()
+            normalized = BytesIO()
+            image.save(normalized, format=image_format, optimize=True)
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
+        raise ValueError("Không đọc được ảnh. Hãy chọn tệp JPG hoặc PNG hợp lệ.") from exc
+    normalized_bytes = normalized.getvalue()
+    if len(normalized_bytes) > IMAGE_MAX_BYTES:
+        raise ValueError("Ảnh sau khi xử lý vượt quá giới hạn 10 MB.")
+    mime_type = "image/jpeg" if image_format == "JPEG" else "image/png"
+    return normalized_bytes, mime_type
 
 
 def navigate(feature, chat_id=None):
@@ -468,8 +584,9 @@ def refresh_ai_health(service, force=False):
 def sidebar(store, service):
     with st.sidebar:
         st.markdown(f'<div class="brand">{BRAND_LOGO}<div><div class="brand-name">EduMind <span>AI</span></div><div class="brand-sub">Học tập · Trưởng thành</div></div></div>', unsafe_allow_html=True)
-        options = ["overview", *[f.value for f in Feature]]
-        st.radio("Không gian của bạn", options, format_func=lambda v: "Tổng quan" if v == "overview" else FEATURE_LABELS[Feature(v)], key="nav", on_change=on_nav_change, label_visibility="collapsed")
+        options = ["overview", *[f.value for f in Feature], TOOLS_NAV]
+        labels = {"overview": "Tổng quan", TOOLS_NAV: "Công cụ học tập"}
+        st.radio("Không gian của bạn", options, format_func=lambda v: labels[v] if v in labels else FEATURE_LABELS[Feature(v)], key="nav", on_change=on_nav_change, label_visibility="collapsed")
         if st.button("Cuộc trò chuyện mới", icon=":material/add:", use_container_width=True):
             if not user_id():
                 st.session_state.auth_reason = "Đăng nhập để tạo thêm cuộc trò chuyện. Ba cuộc trò chuyện khách hiện tại vẫn được giữ nguyên."
@@ -566,6 +683,23 @@ def overview(store):
                     st.session_state.active_dialog = ("auth", None)
                 elif user_id() and st.button("Bắt đầu cuộc trò chuyện mới", key="overview_new", type="primary", use_container_width=True, icon=":material/add:"):
                     navigate(Feature.STUDY)
+
+
+def educational_tools_page():
+    st.markdown(
+        '<div class="page-heading"><div><div class="eyebrow">EDUMIND · TÀI NGUYÊN HỌC TẬP</div>'
+        '<h1>Công cụ học tập</h1><p class="lead">Mở nhanh các công cụ Toán và Khoa học để học tập chủ động hơn.</p></div></div>',
+        unsafe_allow_html=True,
+    )
+    name = st.selectbox("Chọn công cụ", list(EDUCATIONAL_TOOLS), key="educational_tool")
+    tool = EDUCATIONAL_TOOLS[name]
+    st.caption(tool["description"])
+    st.link_button("Mở công cụ trong tab mới", tool["url"], use_container_width=True)
+    if tool["embed"]:
+        st.caption("Nếu công cụ không hiển thị trong khung, hãy mở bằng nút phía trên. EduMind không vượt giới hạn nhúng của website.")
+        st.components.v1.iframe(tool["url"], height=650, scrolling=True)
+    else:
+        st.info("Website không cho phép nhúng nội dung vào EduMind; hãy mở công cụ trong tab mới.")
 
 
 def header(feature):
@@ -873,6 +1007,118 @@ def queue_question(store, service, chat, text=None, retry=False):
     st.rerun()
 
 
+def queue_image_question(store, service, chat, image_bytes, mime_type, daily_limit):
+    if not user_id():
+        st.warning("Đăng nhập để dùng chức năng giải bài bằng ảnh.")
+        return
+    if not service.available:
+        st.warning("AI chưa được cấu hình. Ảnh chưa được gửi.")
+        return
+    pending = st.session_state.get("pending_request")
+    if pending and pending.get("chat_id") == chat.id:
+        return
+    is_retry = bool(
+        chat.messages
+        and chat.messages[-1]["role"] == "user"
+        and chat.messages[-1].get("kind") == "image"
+    )
+    if chat.messages and chat.messages[-1]["role"] == "user" and not is_retry:
+        st.warning("Hãy nhận hoặc thử lại câu trả lời gần nhất trước khi gửi thêm nội dung.")
+        return
+    usage_date = datetime.now(LOCAL_TZ).date().isoformat()
+    try:
+        store.reserve_image_quota(user_id(), usage_date, daily_limit)
+    except ImageQuotaExceeded as exc:
+        st.error(str(exc))
+        return
+    if not is_retry:
+        chat.add_question("Đã gửi ảnh bài tập")
+        chat.messages[-1]["kind"] = "image"
+        chat.messages[-1]["context"] = request_context(chat)
+    persist(store, chat)
+    st.session_state.failure = None
+    st.session_state.pending_request = {
+        "chat_id": chat.id,
+        "mode": st.session_state.mode,
+        "image_bytes": image_bytes,
+        "image_mime_type": mime_type,
+    }
+    st.rerun()
+
+
+def study_image_controls(store, service, chat):
+    with st.expander("Giải bài tập qua ảnh", expanded=False):
+        if not user_id():
+            st.info("Đăng nhập để chụp/chọn ảnh. Hạn mức mặc định là 3 lượt mỗi ngày.")
+            if st.button("Đăng nhập để giải bài bằng ảnh", key=f"image_login_{chat.id}", use_container_width=True):
+                st.session_state.auth_reason = "Đăng nhập để dùng giải bài bằng ảnh với hạn mức 3 lượt mỗi ngày."
+                st.session_state.active_dialog = ("auth", None)
+            return
+        try:
+            daily_limit = image_daily_limit()
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        usage_date = datetime.now(LOCAL_TZ).date().isoformat()
+        used, remaining = store.image_quota_status(user_id(), usage_date, daily_limit)
+        st.caption(f"Hôm nay đã dùng {used}/{daily_limit} lượt · Còn {remaining} lượt.")
+        st.caption("Mỗi lần gửi ảnh được tính một lượt, kể cả khi dịch vụ AI gặp lỗi. Ảnh không được lưu vào lịch sử.")
+        if remaining <= 0:
+            st.warning("Bạn đã dùng hết hạn mức hôm nay. Chức năng chọn/chụp ảnh sẽ mở lại vào ngày mai.")
+            return
+
+        revisions = st.session_state.image_picker_revisions
+        revision = revisions.get(chat.id, 0)
+        source = st.radio(
+            "Nguồn ảnh",
+            ["Chụp ảnh", "Chọn từ thư viện"],
+            horizontal=True,
+            key=f"image_source_{chat.id}",
+            label_visibility="collapsed",
+        )
+        if source == "Chụp ảnh":
+            uploaded = st.camera_input("Chụp bài tập", key=f"homework_camera_{chat.id}_{revision}")
+        else:
+            uploaded = st.file_uploader(
+                "Chọn ảnh bài tập",
+                type=["jpg", "jpeg", "png"],
+                key=f"homework_upload_{chat.id}_{revision}",
+                help="JPG/JPEG/PNG, tối đa 10 MB.",
+            )
+
+        image_bytes, mime_type = None, None
+        if uploaded is not None:
+            raw_bytes = uploaded.getvalue()
+            fingerprint = hashlib.sha256(raw_bytes).digest()
+            cached = st.session_state.image_previews.get(chat.id)
+            if cached and cached[0] == fingerprint:
+                image_bytes, mime_type = cached[1], cached[2]
+            else:
+                try:
+                    image_bytes, mime_type = normalize_image_upload(uploaded)
+                except ValueError as exc:
+                    st.session_state.image_previews.pop(chat.id, None)
+                    st.error(str(exc))
+                else:
+                    st.session_state.image_previews[chat.id] = (fingerprint, image_bytes, mime_type)
+            if image_bytes:
+                st.image(image_bytes, caption="Xem trước ảnh bài tập", use_container_width=True)
+
+        clear_col, solve_col = st.columns([1, 2])
+        if uploaded is not None and clear_col.button("Xóa / chọn ảnh khác", key=f"clear_image_{chat.id}", use_container_width=True):
+            revisions[chat.id] = revision + 1
+            st.session_state.image_previews.pop(chat.id, None)
+            st.rerun()
+        if solve_col.button(
+            "Giải bài trong ảnh",
+            key=f"solve_image_{chat.id}",
+            type="primary",
+            use_container_width=True,
+            disabled=not image_bytes or not service.available,
+        ):
+            queue_image_question(store, service, chat, image_bytes, mime_type, daily_limit)
+
+
 def waiting_indicator(chat):
     expression = wellbeing_expression(chat.metadata.get("mood")) if chat.feature == Feature.WELLBEING else "curious"
     eye = "M39 22q4-5 8 0M56 22q4-5 8 0" if expression == "happy" else "M40 22h7M57 22h7" if expression == "tired" else ""
@@ -896,23 +1142,39 @@ def process_pending_request(store, service, chat):
         return
     mode = AIMode(pending.get("mode", AIMode.FAST.value))
     context = chat.messages[-1].get("context", request_context(chat))
-    request = AIRequest(chat.feature, mode, chat.messages[-1]["content"], chat.messages[:-1], context)
+    request = AIRequest(
+        chat.feature,
+        mode,
+        chat.messages[-1]["content"],
+        chat.messages[:-1],
+        context,
+        pending.get("image_bytes"),
+        pending.get("image_mime_type"),
+    )
     try:
-        response = service.answer(request, user=st.session_state.user)
-    except (AIUnavailable, LoginRequired) as exc:
-        st.session_state.failure = {
-            "chat_id": chat.id,
-            "message": str(exc),
-            "context": context,
-            "kind": getattr(exc, "kind", None),
-        }
-    else:
-        chat.messages.append({"role": "assistant", "content": response})
-        chat.updated_at = now_iso()
-        st.session_state.failure = None
-        persist(store, chat)
-        st.session_state.drafts.pop(chat.id, None)
-        st.session_state.pop("pending_action", None)
+        try:
+            response = service.answer(request, user=st.session_state.user)
+        except (AIUnavailable, LoginRequired) as exc:
+            st.session_state.failure = {
+                "chat_id": chat.id,
+                "message": str(exc),
+                "context": context,
+                "kind": getattr(exc, "kind", None),
+            }
+        else:
+            chat.messages.append({"role": "assistant", "content": response})
+            chat.updated_at = now_iso()
+            st.session_state.failure = None
+            persist(store, chat)
+            st.session_state.drafts.pop(chat.id, None)
+            st.session_state.pop("pending_action", None)
+    finally:
+        if pending.get("image_bytes") is not None:
+            pending.pop("image_bytes", None)
+            pending.pop("image_mime_type", None)
+            st.session_state.image_previews.pop(chat.id, None)
+            revisions = st.session_state.image_picker_revisions
+            revisions[chat.id] = revisions.get(chat.id, 0) + 1
     st.session_state.pending_request = None
     st.rerun()
 
@@ -949,6 +1211,8 @@ def feature_page(store, service, feature):
     with st.container(key="service_status"):
         if not service.available:
             st.info("AI chưa được cấu hình. Bạn vẫn có thể đăng nhập, thiết lập nội dung và xem lịch sử đã lưu.")
+    if feature == Feature.STUDY:
+        study_image_controls(store, service, chat)
     with st.container(key="conversation", height="stretch", border=False):
         conversation_view(chat)
         if is_pending:
@@ -957,24 +1221,38 @@ def feature_page(store, service, feature):
     unanswered = bool(chat.messages and chat.messages[-1]["role"] == "user")
     with st.container(key="retry_panel"):
         if unanswered and not is_pending:
-            st.warning(failure["message"] if failure and failure["chat_id"] == chat.id else "Câu hỏi gần nhất chưa có phản hồi. Bạn có thể thử lại.")
-            if st.button("Thử trả lời lại", key=f"retry_{chat.id}", disabled=not service.available):
+            is_image_question = chat.messages[-1].get("kind") == "image"
+            fallback = (
+                "Lượt giải ảnh đã được tính. Bạn có thể chọn lại ảnh và gửi lại nếu còn hạn mức."
+                if is_image_question
+                else "Câu hỏi gần nhất chưa có phản hồi. Bạn có thể thử lại."
+            )
+            st.warning(failure["message"] if failure and failure["chat_id"] == chat.id else fallback)
+            if not is_image_question and st.button("Thử trả lời lại", key=f"retry_{chat.id}", disabled=not service.available):
                 queue_question(store, service, chat, retry=True)
     with st.container(key="conversation_empty"):
         checkin_ready = feature != Feature.WELLBEING or chat.metadata.get("checkin_complete") or chat.messages
         if not chat.messages and checkin_ready:
             if feature in (Feature.WELLBEING, Feature.CAREER):
-                with st.container(key="contextual-empty"):
-                    if feature == Feature.WELLBEING:
-                        st.markdown(contextual_mindi(wellbeing_expression(chat.metadata.get("mood")), "heart", "Mindi ở đây cùng bạn"), unsafe_allow_html=True)
-                        st.markdown("**Bạn có thể bắt đầu thật ngắn.**")
-                        st.write("Mindi sẽ lắng nghe theo nhịp bạn thấy thoải mái.")
-                    else:
-                        st.markdown(career_pet(chat.metadata.get("stage")), unsafe_allow_html=True)
-                        st.markdown("**Mỗi hướng đi bắt đầu từ một điều bạn tò mò.**")
-                        st.write("Mở Thiết lập nội dung để hoàn thiện hồ sơ, hoặc đặt câu hỏi trực tiếp bên dưới.")
+                if feature == Feature.WELLBEING:
+                    pet_markup = contextual_mindi(wellbeing_expression(chat.metadata.get("mood")), "heart", "Mindi ở đây cùng bạn")
+                    title = "Bạn có thể bắt đầu thật ngắn."
+                    desc = "Mindi sẽ lắng nghe theo nhịp bạn thấy thoải mái."
+                else:
+                    pet_markup = career_pet(chat.metadata.get("stage"))
+                    title = "Mỗi hướng đi bắt đầu từ một điều bạn tò mò."
+                    desc = "Mở Thiết lập nội dung để hoàn thiện hồ sơ, hoặc đặt câu hỏi trực tiếp bên dưới."
+                st.markdown(
+                    f'<div class="contextual-card">'
+                    f'<div class="contextual-pet-wrap">{pet_markup}</div>'
+                    f'<div class="contextual-text-wrap">'
+                    f'<div class="contextual-title">{html.escape(title)}</div>'
+                    f'<div class="contextual-desc">{html.escape(desc)}</div>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
             else:
-                with st.container(border=True):
+                with st.container(border=True, key="study-empty"):
                     st.markdown("**Bạn muốn bắt đầu từ đâu?**")
                     st.write("Gửi đề bài hoặc điều bạn chưa hiểu.")
     submitted, draft = False, ""
@@ -1027,6 +1305,32 @@ def model_settings(list_name, single_name, default):
     return list(dict.fromkeys(model for model in models if model))
 
 
+def mobile_orientation_banner():
+    if st.session_state.get("mobile_rotate_dismissed"):
+        return
+    with st.container(key="mobile-orient-notice"):
+        st.markdown(
+            '<div class="orient-banner-inner">'
+            '<div class="orient-badge">📱 ➔ 🔄 Gợi ý trải nghiệm</div>'
+            '<div class="orient-text-body">'
+            '<strong>Xoay ngang màn hình để học tập tốt hơn</strong>'
+            '<p>EduMind AI hiển thị tối ưu và đầy đủ không gian nhất khi bạn xoay ngang màn hình điện thoại.</p>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        col1, col2 = st.columns(2, gap="small")
+        with col1:
+            if st.button("Đồng ý", key="accept_rotate_screen", type="primary", use_container_width=True):
+                st.session_state.mobile_rotate_dismissed = True
+                st.toast("Hãy xoay ngang điện thoại để có trải nghiệm học tập tốt nhất! 🔄")
+                st.rerun()
+        with col2:
+            if st.button("Từ chối", key="dismiss_rotate_screen", use_container_width=True):
+                st.session_state.mobile_rotate_dismissed = True
+                st.rerun()
+
+
 def run():
     st.set_page_config(page_title="EduMind AI · Học tập & trưởng thành", page_icon="🎓", layout="wide", initial_sidebar_state="auto")
     load_dotenv(ROOT / ".env")
@@ -1040,8 +1344,11 @@ def run():
     service = AIService(keys, fast_models=fast_models, thinking_models=thinking_models)
     refresh_ai_health(service)
     sidebar(store, service)
+    mobile_orientation_banner()
     if st.session_state.nav == "overview":
         overview(store)
+    elif st.session_state.nav == TOOLS_NAV:
+        educational_tools_page()
     else:
         feature_page(store, service, Feature(st.session_state.nav))
     dialog = st.session_state.get("active_dialog")

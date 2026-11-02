@@ -1,8 +1,9 @@
 import hashlib
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -13,8 +14,8 @@ from google.genai import errors
 from edumind.ai import AIErrorKind, AIService, AIUnavailable, LoginRequired, classify_exception, safety_response, system_instruction
 from edumind.auth import Auth
 from edumind.catalog import MANUAL, subjects, topics
-from edumind.models import AIMode, AIRequest, Conversation, Feature, history_group
-from edumind.storage import OwnershipError, Store
+from edumind.models import AIMode, AIRequest, Conversation, Feature, LOCAL_TZ, history_group
+from edumind.storage import ImageQuotaExceeded, OwnershipError, Store
 
 
 @pytest.fixture
@@ -122,6 +123,30 @@ def test_history_search_order_metadata_rename_and_delete(store):
     assert store.get_chat("a", second.id) is not None
 
 
+def test_image_quota_is_atomic_per_owner_and_day(store):
+    user_a = Auth(store).register("image-a@example.com", "password123")
+    user_b = Auth(store).register("image-b@example.com", "password123")
+    quota_day = "2026-11-01"
+
+    def reserve():
+        try:
+            return store.reserve_image_quota(user_a.id, quota_day, 3)
+        except ImageQuotaExceeded:
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: reserve(), range(10)))
+
+    assert sum(result is not None for result in results) == 3
+    assert store.image_quota_status(user_a.id, quota_day, 3) == (3, 0)
+    assert store.image_quota_status(user_b.id, quota_day, 3) == (0, 3)
+    assert store.image_quota_status(user_a.id, "2026-11-02", 3) == (0, 3)
+    with pytest.raises(ImageQuotaExceeded):
+        store.reserve_image_quota(user_a.id, quota_day, 3)
+    with pytest.raises(OwnershipError):
+        store.reserve_image_quota("", quota_day, 3)
+
+
 @pytest.mark.parametrize("feature", list(Feature))
 def test_thinking_authorization_precedes_all_provider_calls(feature):
     service = AIService(["test-only"])
@@ -144,6 +169,48 @@ def test_provider_context_history_and_thinking_configuration():
     assert [c.role for c in args["contents"]] == ["user", "model", "user"]
     assert '"grade": 9' in args["contents"][-1].parts[0].text
     assert args["config"].thinking_config.thinking_budget == 8192
+
+
+def test_image_request_is_multimodal_and_requires_login_before_provider():
+    payload = b"png bytes used only by the fake provider"
+    request = AIRequest(
+        Feature.STUDY,
+        AIMode.FAST,
+        "Giải bài trong ảnh",
+        [],
+        {"grade": 8},
+        payload,
+        "image/png",
+    )
+    with patch("google.genai.Client") as constructor:
+        with pytest.raises(LoginRequired):
+            AIService(["key"]).answer(request)
+    constructor.assert_not_called()
+
+    content = AIService._contents(request)[-1]
+    assert content.parts[0].text.endswith("Giải bài trong ảnh")
+    assert content.parts[1].inline_data.data == payload
+    assert content.parts[1].inline_data.mime_type == "image/png"
+
+
+def test_image_request_does_not_auto_retry_or_fall_back():
+    client = MagicMock()
+    client.models.generate_content.side_effect = errors.ServerError(503, {"error": {"code": 503}})
+    manager = MagicMock()
+    manager.__enter__.return_value = client
+    request = AIRequest(Feature.STUDY, AIMode.FAST, "Giải ảnh", [], {}, b"image", "image/jpeg")
+    user = SimpleNamespace(id="student")
+    service = AIService(
+        ["key-a", "key-b"],
+        fast_models=["primary", "fallback"],
+        max_attempts=3,
+        retry_delays=(0, 0),
+    )
+    with patch("google.genai.Client", return_value=manager):
+        with pytest.raises(AIUnavailable):
+            service.answer(request, user=user)
+    assert client.models.generate_content.call_count == 1
+    assert client.models.generate_content.call_args.kwargs["model"] == "primary"
 
 
 def test_provider_failure_exposes_no_provider_details():
@@ -240,6 +307,16 @@ def test_safety_and_age_appropriate_career_prompts():
     prompt = system_instruction(request)
     assert "lớp 11" not in prompt and "Không giới hạn vào nghề công nghệ" in prompt
     assert "mức lương" in prompt
+    study_prompt = system_instruction(AIRequest(Feature.STUDY, AIMode.FAST, "Giải bài", [], {"grade": 9}))
+    today = datetime.now(LOCAL_TZ).date()
+    academic_start = today.year if today.month >= 9 else today.year - 1
+    assert f"{academic_start}–{academic_start + 1}" in study_prompt
+    assert "không bịa số hiệu văn bản" in study_prompt
+    assert "các đoạn có dòng trống" in study_prompt
+    image_prompt = system_instruction(
+        AIRequest(Feature.STUDY, AIMode.FAST, "Giải ảnh", [], {}, b"image", "image/png")
+    )
+    assert "dữ kiện bị mờ" in image_prompt
 
 
 def test_catalog_and_timezone_groups():

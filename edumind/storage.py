@@ -7,11 +7,20 @@ from pathlib import Path
 
 from .models import Conversation, Feature, now_iso
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class OwnershipError(PermissionError):
     pass
+
+
+class ImageQuotaExceeded(ValueError):
+    def __init__(self, daily_limit):
+        self.daily_limit = daily_limit
+        super().__init__(
+            f"Bạn đã dùng hết {daily_limit} lượt giải bài bằng ảnh hôm nay. "
+            "Hạn mức sẽ được làm mới vào ngày mai."
+        )
 
 
 class Store:
@@ -61,6 +70,9 @@ class Store:
                 if name not in columns:
                     conn.execute(f"ALTER TABLE chats ADD COLUMN {name} {declaration}")
             conn.execute("CREATE INDEX IF NOT EXISTS chats_owner_updated ON chats(username, updated_at DESC)")
+            conn.execute("""CREATE TABLE IF NOT EXISTS image_usage (
+                username TEXT NOT NULL, usage_date TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (username, usage_date))""")
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod
@@ -135,3 +147,40 @@ class Store:
             result = conn.execute("DELETE FROM chats WHERE id=? AND username=?", (chat_id, owner))
             if result.rowcount != 1:
                 raise OwnershipError("Không tìm thấy cuộc trò chuyện của bạn.")
+
+    def image_quota_status(self, owner, usage_date, daily_limit):
+        self.require_owner(owner)
+        if daily_limit < 1:
+            raise ValueError("Hạn mức ảnh phải là số nguyên dương.")
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT requests FROM image_usage WHERE username=? AND usage_date=?",
+                (owner, usage_date),
+            ).fetchone()
+        used = row["requests"] if row else 0
+        return used, max(0, daily_limit - used)
+
+    def reserve_image_quota(self, owner, usage_date, daily_limit):
+        self.require_owner(owner)
+        if daily_limit < 1:
+            raise ValueError("Hạn mức ảnh phải là số nguyên dương.")
+        with self.connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT requests FROM image_usage WHERE username=? AND usage_date=?",
+                (owner, usage_date),
+            ).fetchone()
+            used = row["requests"] if row else 0
+            if used >= daily_limit:
+                raise ImageQuotaExceeded(daily_limit)
+            if row:
+                conn.execute(
+                    "UPDATE image_usage SET requests=requests+1 WHERE username=? AND usage_date=?",
+                    (owner, usage_date),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO image_usage (username, usage_date, requests) VALUES (?, ?, 1)",
+                    (owner, usage_date),
+                )
+        return daily_limit - used - 1
