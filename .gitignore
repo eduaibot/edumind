@@ -2,11 +2,10 @@
 .env
 __pycache__/
 *.pyc
-.test-deps/
 .pytest_cache/
-.test-baseline/
-.test-runtime/
+.test*
 *.backup-*.db
 *.incompatible-*.db
 .streamlit/secrets.toml
 *.db
+~$*.docx
