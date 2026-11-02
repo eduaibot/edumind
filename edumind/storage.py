@@ -42,7 +42,12 @@ class Store:
         with self.connection() as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
-                raise RuntimeError("Database có phiên bản mới hơn ứng dụng.")
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                backup_path = self.path.with_name(f"{self.path.stem}.incompatible-v{version}-{stamp}.db")
+                with sqlite3.connect(backup_path) as backup:
+                    conn.backup(backup)
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                return
             if version == SCHEMA_VERSION:
                 return
             has_tables = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table'").fetchone()

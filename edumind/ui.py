@@ -130,7 +130,9 @@ p, li { line-height:1.5; }
 .st-key-overview-footer { flex:0 0 auto; margin-top:.45rem; }
 .st-key-feature-toolbar { flex:0 0 auto; padding:.55rem .7rem; border-radius:16px; border:1px solid color-mix(in srgb,currentColor 9%,transparent); background:color-mix(in srgb,var(--em-violet) 4%,transparent); }
 .st-key-conversation { flex:1 1 auto; min-height:140px; max-height:calc(100vh - 290px); overflow-y:auto; overscroll-behavior:contain; scroll-behavior:smooth; scroll-padding-block:1rem; padding:.25rem .5rem .5rem .25rem; scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--primary-color,var(--em-violet)) 45%,transparent) transparent; }
-.st-key-conversation > div, .st-key-conversation [data-testid="stVerticalBlock"] { min-height:0; }
+.st-key-conversation > div { flex-shrink:0 !important; min-height:fit-content !important; }
+.st-key-conversation [data-testid="stChatMessage"] { flex-shrink:0 !important; }
+.st-key-conversation [data-testid="stVerticalBlock"] { min-height:fit-content; }
 .st-key-conversation [data-testid="stChatMessageContent"] { min-width:0; overflow-wrap:anywhere; }
 .st-key-conversation [data-testid="stMarkdownContainer"] p { line-height:1.75; margin:0 0 .85rem; }
 .st-key-conversation [data-testid="stMarkdownContainer"] li { line-height:1.7; margin:.2rem 0; }

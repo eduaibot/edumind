@@ -58,6 +58,19 @@ def test_migration_backups_preserves_legacy_and_is_idempotent(tmp_path):
         assert conn.execute("SELECT password FROM users").fetchone()[0].startswith("$argon2id$")
 
 
+def test_migration_handles_newer_incompatible_version_gracefully(tmp_path):
+    path = tmp_path / "future.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE users(username TEXT PRIMARY KEY, password TEXT)")
+        conn.execute("PRAGMA user_version = 99")
+    store = Store(path)
+    store.migrate()
+    with store.connection() as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    incompatible_backups = list(tmp_path.glob("*.incompatible-v99-*.db"))
+    assert len(incompatible_backups) == 1
+
+
 def test_registration_validation_and_duplicate_email(store):
     auth = Auth(store)
     for email, password in [("invalid", "longpassword"), ("a@b.com", "short")]:
